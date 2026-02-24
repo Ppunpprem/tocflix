@@ -161,7 +161,7 @@ export default function Navbar() {
 
           {/* GitHub */}
           <a
-            href="https://github.com/Ppunpprem/TOC_movie_website"
+            href="https://github.com/Ppunpprem/tocflix.git"
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-2 bg-[#2d2d2d] hover:bg-[#3d3d3d] text-xs font-medium rounded-lg transition-colors"
