@@ -11,7 +11,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
-  base: '/TOC_movie_website/',
+  base: '/tocflix/',
   plugins: [
     react(),
     tailwindcss(),
