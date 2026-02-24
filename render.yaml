@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: tocflix
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn main:app --bind 0.0.0.0:$PORT --timeout 120 --workers 1
+    plan: free
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
