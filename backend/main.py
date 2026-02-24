@@ -163,7 +163,16 @@ def get_new_arrivals():
     recent = sorted(crawler.movies, key=lambda x: x.get("year") or 0, reverse=True)[:10]
     return jsonify([format_movie_brief(m) for m in recent])
 
-if __name__ == "__main__":
+# Start the crawler in a background thread so the server doesn't time out on boot
+def start_background_crawler():
     get_crawler()
+
+if __name__ == "__main__":
+    # Local development
+    threading.Thread(target=start_background_crawler, daemon=True).start()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+else:
+    # Production (Gunicorn)
+    # Start the "cold-start" fetching in a thread so Gunicorn doesn't kill the worker
+    threading.Thread(target=start_background_crawler, daemon=True).start()
