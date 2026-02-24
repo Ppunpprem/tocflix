@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, Link } from "react-router-dom";
 import tocflixLogo from "./assets/TOCFLIX.png";
 
 export default function Navbar() {
@@ -65,20 +65,20 @@ export default function Navbar() {
 
           {/* Desktop links */}
           <div className="hidden md:flex items-center gap-6 text-sm">
-            <a
-              href="/"
+            <Link
+              to="/"
               style={linkStyle("/")}
               className="hover:text-white transition-colors"
             >
               Home
-            </a>
-            <a
-              href="/TOC_movie_website/movies"
-              style={linkStyle("/TOC_movie_website/movies")}
+            </Link>
+            <Link
+              to="/movies"
+              style={linkStyle("/movies")}
               className="hover:text-gray-200 transition-colors"
             >
               Movies
-            </a>
+            </Link>
           </div>
         </div>
 
@@ -295,22 +295,24 @@ export default function Navbar() {
       {/* Mobile Nav Dropdown */}
       {menuOpen && (
         <div className="md:hidden bg-[#1a1a1a] border-b border-gray-800 px-6 py-4 flex flex-col gap-4 sticky top-[68px] z-40 items-center">
-          <a
-            href="/"
+          <Link
+            to="/"
             style={linkStyle("/")}
+            onClick={() => setMenuOpen(false)}
             className="text-sm hover:text-white transition-colors"
           >
             Home
-          </a>
-          <a
-            href="/movies"
+          </Link>
+          <Link
+            to="/movies"
             style={linkStyle("/movies")}
+            onClick={() => setMenuOpen(false)}
             className="text-sm hover:text-gray-200 transition-colors"
           >
             Movies
-          </a>
+          </Link>
           <a
-            href="https://github.com/Ppunpprem/TOC_movie_website"
+            href="https://github.com/Ppunpprem/tocflix.git"
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-2 bg-[#2d2d2d] hover:bg-[#3d3d3d] text-xs font-medium rounded-lg transition-colors w-fit px-4 py-2"
