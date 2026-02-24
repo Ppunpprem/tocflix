@@ -318,42 +318,54 @@ export default function HomePage() {
   const [allMovies,   setAllMovies]   = useState([]);
   const [loading,     setLoading]     = useState(true);
 
+  const [warming,     setWarming]     = useState(false);
+
   useEffect(() => {
-    let retryTimer
+    let cancelled = false;
+
     const fetchAll = async () => {
       try {
         const [trendingRes, newRes, allRes] = await Promise.all([
           fetch(`${API}/movies/trending`),
           fetch(`${API}/movies/new-arrivals`),
           fetch(`${API}/movies`),
-        ])
+        ]);
+
+        // If any endpoint is still warming up (503), retry automatically every 3s
+        if (trendingRes.status === 503 || newRes.status === 503 || allRes.status === 503) {
+          if (!cancelled) {
+            setWarming(true);
+            setTimeout(fetchAll, 3000);
+          }
+          return;
+        }
 
         const [trendingData, newData, allData] = await Promise.all([
           trendingRes.json(),
           newRes.json(),
           allRes.json(),
-        ])
+        ]);
 
-        // Guard: if backend is warming up it returns an object, not an array — retry
-        if (!Array.isArray(allData)) {
-          retryTimer = setTimeout(fetchAll, 5000)
-          return
+        if (!cancelled) {
+          setTrending(Array.isArray(trendingData) ? trendingData : []);
+          setNewArrival(Array.isArray(newData) ? newData : []);
+          setAllMovies(Array.isArray(allData) ? allData : []);
+          setWarming(false);
+          setLoading(false);
         }
-
-        setTrending(Array.isArray(trendingData)  ? trendingData  : [])
-        setNewArrival(Array.isArray(newData)      ? newData       : [])
-        setAllMovies(Array.isArray(allData)       ? allData       : [])
       } catch (err) {
-        console.error("Failed to fetch movies:", err)
-        retryTimer = setTimeout(fetchAll, 5000)
-      } finally {
-        setLoading(false)
+        console.error("Failed to fetch movies:", err);
+        // On network error, retry after 3s (handles Render cold start)
+        if (!cancelled) {
+          setWarming(true);
+          setTimeout(fetchAll, 3000);
+        }
       }
-    }
+    };
 
-    fetchAll()
-    return () => clearTimeout(retryTimer)
-  }, [])
+    fetchAll();
+    return () => { cancelled = true; };
+  }, []);
 
   const handleMovieClick = (movie) => navigate(`/movies/${movie.id}`);
   const handleSeeMore    = ()      => navigate("/movies");
@@ -377,6 +389,16 @@ export default function HomePage() {
       style={{ background: "#111", overflowX: "clip" }}
     >
       <Navbar />
+
+      {/* Warming-up banner */}
+      {warming && (
+        <div style={{
+          background: "#1a1a2e", borderBottom: "1px solid #e5091422",
+          padding: "10px 20px", textAlign: "center", fontSize: "13px", color: "#aaa"
+        }}>
+          ⏳ Server warming up, loading movies… this takes ~30 seconds on first visit.
+        </div>
+      )}
 
       <Hero
         movies={trending}
