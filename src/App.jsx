@@ -5,7 +5,7 @@ import MoviesPage from './MoviesPage'
 
 function App() {
   return (
-    <BrowserRouter basename={import.meta.env.BASE_URL}>
+    <BrowserRouter basename="/tocflix">
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/movies/:id" element={<DetailPage />} />
