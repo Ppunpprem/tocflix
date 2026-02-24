@@ -73,8 +73,8 @@ export default function Navbar() {
               Home
             </a>
             <a
-              href="/movies"
-              style={linkStyle("/movies")}
+              href="/TOC_movie_website/movies"
+              style={linkStyle("/TOC_movie_website/movies")}
               className="hover:text-gray-200 transition-colors"
             >
               Movies
