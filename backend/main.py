@@ -6,7 +6,8 @@ import threading
 
 # we need to set up the crawler and fetch movies before we can serve them through the API
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+# Explicitly allowing GitHub Pages and all origins for maximum compatibility
+CORS(app, resources={r"/*": {"origins": ["https://ppunpprem.github.io", "*"]}})
 
 #only crawl imdb once per server run
 _cache_lock   = threading.Lock()
@@ -20,7 +21,9 @@ def get_crawler() -> IMDbMovieCrawler:
             print("Cold-start: fetching IMDb Top 250 …")
             c = IMDbMovieCrawler()
             c.fetch_top_movies()                                   # list of 250
-            c.fetch_movies_details_parallel(c.movies, max_workers=10)  # all details
+            # REMOVED: c.fetch_movies_details_parallel(c.movies, max_workers=10)
+            # Fetching 250 details at once is too slow for Render (times out).
+            # Details will be fetched on-demand in get_movie() or backgrounded.
             _crawler_cache = c
             print(f"Cache ready — {len(c.movies)} movies loaded")
         return _crawler_cache
