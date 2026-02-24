@@ -1,3 +1,4 @@
+import os
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from imdb_movie_crawler import IMDbMovieCrawler
@@ -163,17 +164,5 @@ def get_new_arrivals():
 
 if __name__ == "__main__":
     get_crawler()
-    app.run(debug=False, port=5000)
-
-# this part is just for testing before we set up the flask to test backend fetching correctly or not.
-# url = "https://www.imdb.com/chart/top/"
-# HEADERS = {
-#     'User-Agent': 'Mozilla/5.0 (iPad; CPU OS 12_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148'
-# }
-# page = requests.get(url, headers=HEADERS)
-
-# print(page.status_code)  # Should be 200 if successful
-
-# soup = BeautifulSoup(page.text, "html.parser")
-# # print(soup.prettify())
-# print(soup.title)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)

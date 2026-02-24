@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import Navbar from "./Navbar";
 
-const API = "http://127.0.0.1:5000";
+import { API_BASE_URL as API } from "./config";
 
 // Genre config  colours only posters come from real movie data
 const GENRE_CONFIG = [

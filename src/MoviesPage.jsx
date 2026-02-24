@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import Navbar from './Navbar'
 
-const API = "http://127.0.0.1:5000"
+import { API_BASE_URL as API } from "./config";
 
 // All genres sourced from real IMDb data these are the most common ones in Top 250
 const ALL_GENRES = [

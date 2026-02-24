@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import Navbar from "./Navbar";
 
-const API = "http://127.0.0.1:5000";
+import { API_BASE_URL as API } from "./config";
 
 // Loading Skeleton
 function LoadingSkeleton() {
