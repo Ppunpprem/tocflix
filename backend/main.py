@@ -3,6 +3,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 from imdb_movie_crawler import IMDbMovieCrawler
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__)
 # Enable CORS for the frontend URL and local dev
@@ -11,14 +12,30 @@ CORS(app)
 _cache_lock = threading.Lock()
 _crawler_cache = None
 _is_loading = False
+_details_loaded = False
+
+def _fetch_all_details(crawler):
+    """Fetch full details (genres, cast, director, etc.) for every movie.
+    Runs in the background after the basic list is ready.
+    Uses 3 workers to balance speed vs Render free-tier memory limits.
+    """
+    global _details_loaded
+    print(f"🔄 Loading details for all {len(crawler.movies)} movies (genres, cast, etc.)...")
+    try:
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            executor.map(crawler.fetch_movie_details, crawler.movies)
+        _details_loaded = True
+        print("✅ All movie details loaded! Genre filtering is now fully accurate.")
+    except Exception as e:
+        print(f"⚠️ Error loading all details: {e}")
 
 def get_crawler(force_load=True):
     """Returns the crawler. If not loaded, starts a background thread to load it."""
     global _crawler_cache, _is_loading
-    
+
     if _crawler_cache is not None:
         return _crawler_cache
-    
+
     if not force_load:
         return None
 
@@ -31,23 +48,32 @@ def get_crawler(force_load=True):
                     print("🚀 Starting lazy load of IMDb data...")
                     c = IMDbMovieCrawler()
                     c.fetch_top_movies()
+                    # Make basic data available IMMEDIATELY so the site loads fast
                     _crawler_cache = c
-                    print(f"✅ Data loaded: {len(c.movies)} movies ready.")
+                    print(f"✅ Basic list ready: {len(c.movies)} movies. Now loading full details...")
+                    # Fetch all detail pages in the background (genres, cast, etc.)
+                    threading.Thread(target=_fetch_all_details, args=(c,), daemon=True).start()
                 except Exception as e:
                     print(f"❌ Error during lazy load: {e}")
                 finally:
                     _is_loading = False
-            
+
             threading.Thread(target=load_task, daemon=True).start()
-    
+
     return _crawler_cache
 
 @app.route("/")
 def home():
-    status = "Ready" if _crawler_cache else ("Loading..." if _is_loading else "Idle")
+    if not _crawler_cache:
+        status = "Loading..." if _is_loading else "Idle"
+    elif not _details_loaded:
+        status = f"Basic list ready ({len(_crawler_cache.movies)} movies) — loading genres & details..."
+    else:
+        status = f"Fully ready ({len(_crawler_cache.movies)} movies with genres)"
     return jsonify({
         "message": "Backend is running successfully!",
-        "database_status": status
+        "database_status": status,
+        "details_loaded": _details_loaded
     })
 
 @app.route("/movies")
