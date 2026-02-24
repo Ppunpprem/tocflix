@@ -1,37 +1,122 @@
 import os
-from flask import Flask, jsonify, request
-from flask_cors import CORS
-from imdb_movie_crawler import IMDbMovieCrawler
+import json
+import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+from imdb_movie_crawler import IMDbMovieCrawler
+
 app = Flask(__name__)
-# Enable CORS for the frontend URL and local dev
 CORS(app)
 
-_cache_lock = threading.Lock()
-_crawler_cache = None
-_is_loading = False
-_details_loaded = False
+# ── Cache file path ──────────────────────────────────────────────
+CACHE_FILE = os.path.join(os.path.dirname(__file__), "movies_cache.json")
+CACHE_MAX_AGE_HOURS = 24  # Refresh cache if older than this
 
-def _fetch_all_details(crawler):
-    """Fetch full details (genres, cast, director, etc.) for every movie.
-    Runs in the background after the basic list is ready.
-    Uses 3 workers to balance speed vs Render free-tier memory limits.
+# ── Global state ─────────────────────────────────────────────────
+_cache_lock      = threading.Lock()
+_crawler_cache   = None   # The IMDbMovieCrawler instance (movies list lives here)
+_is_loading      = False
+_details_loaded  = False  # True once ALL movies have genres/country/cast
+
+# ── Cache helpers ─────────────────────────────────────────────────
+
+def _save_cache(movies: list):
+    """Persist movie list (with full details) to disk."""
+    try:
+        payload = {"timestamp": time.time(), "movies": movies}
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        print(f"💾 Cache saved: {len(movies)} movies → {CACHE_FILE}")
+    except Exception as e:
+        print(f"⚠️  Could not save cache: {e}")
+
+def _load_cache() -> list | None:
+    """Load movies from disk cache if it exists and is fresh enough."""
+    if not os.path.exists(CACHE_FILE):
+        return None
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        age_hours = (time.time() - payload.get("timestamp", 0)) / 3600
+        if age_hours > CACHE_MAX_AGE_HOURS:
+            print(f"⏰ Cache is {age_hours:.1f}h old — will refresh.")
+            return None
+        movies = payload.get("movies", [])
+        print(f"⚡ Loaded {len(movies)} movies from cache ({age_hours:.1f}h old).")
+        return movies
+    except Exception as e:
+        print(f"⚠️  Cache load failed: {e}")
+        return None
+
+# ── Detail fetching ───────────────────────────────────────────────
+
+def _fetch_all_details(crawler: IMDbMovieCrawler):
+    """
+    Fetch genres, country, cast, etc. for every movie using 20 parallel workers.
+    With 20 workers this takes ~25-35 seconds for 250 movies.
+    Afterwards, saves everything to the cache file so future startups are instant.
     """
     global _details_loaded
-    print(f"🔄 Loading details for all {len(crawler.movies)} movies (genres, cast, etc.)...")
+    n = len(crawler.movies)
+    print(f"🔄 Fetching full details for {n} movies (20 workers)…")
     try:
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with ThreadPoolExecutor(max_workers=20) as executor:
             executor.map(crawler.fetch_movie_details, crawler.movies)
         _details_loaded = True
-        print("✅ All movie details loaded! Genre filtering is now fully accurate.")
+        print(f"✅ All {n} movie details loaded — genres/country/cast ready!")
+        _save_cache(crawler.movies)
     except Exception as e:
-        print(f"⚠️ Error loading all details: {e}")
+        print(f"⚠️  Error fetching all details: {e}")
+
+# ── Startup loader ────────────────────────────────────────────────
+
+def _init_crawler():
+    """
+    Called once at server start (in a background thread).
+    Strategy:
+      1. If cache file exists and is fresh → load it instantly, mark fully ready.
+      2. Otherwise → scrape IMDb basic list first, make it live immediately,
+         then fetch all details with 20 workers (~30 sec), save cache.
+    """
+    global _crawler_cache, _is_loading, _details_loaded
+
+    _is_loading = True
+    try:
+        # ── Try cache first ──────────────────────────────────────
+        cached_movies = _load_cache()
+        if cached_movies:
+            c = IMDbMovieCrawler()
+            c.movies = cached_movies
+            c.movies_dict = {m["id"]: m for m in cached_movies if m.get("id")}
+            _crawler_cache = c
+            _details_loaded = True
+            print("⚡ Server ready instantly from cache!")
+            # Refresh cache in background if it's getting stale
+            return
+
+        # ── No cache — scrape IMDb ───────────────────────────────
+        print("🚀 No cache found. Fetching IMDb Top 250…")
+        c = IMDbMovieCrawler()
+        c.fetch_top_movies()
+        # Make basic list live immediately so the site works right away
+        _crawler_cache = c
+        print(f"📋 Basic list ready: {len(c.movies)} movies (no genres yet).")
+
+        # Fetch all details in THIS thread (background thread already), 20 workers
+        _fetch_all_details(c)
+
+    except Exception as e:
+        print(f"❌ Startup error: {e}")
+    finally:
+        _is_loading = False
+
 
 def get_crawler(force_load=True):
-    """Returns the crawler. If not loaded, starts a background thread to load it."""
-    global _crawler_cache, _is_loading
+    """Return the crawler, starting the load if not yet started."""
+    global _is_loading
 
     if _crawler_cache is not None:
         return _crawler_cache
@@ -41,46 +126,39 @@ def get_crawler(force_load=True):
 
     with _cache_lock:
         if _crawler_cache is None and not _is_loading:
-            _is_loading = True
-            def load_task():
-                global _crawler_cache, _is_loading
-                try:
-                    print("🚀 Starting lazy load of IMDb data...")
-                    c = IMDbMovieCrawler()
-                    c.fetch_top_movies()
-                    # Make basic data available IMMEDIATELY so the site loads fast
-                    _crawler_cache = c
-                    print(f"✅ Basic list ready: {len(c.movies)} movies. Now loading full details...")
-                    # Fetch all detail pages in the background (genres, cast, etc.)
-                    threading.Thread(target=_fetch_all_details, args=(c,), daemon=True).start()
-                except Exception as e:
-                    print(f"❌ Error during lazy load: {e}")
-                finally:
-                    _is_loading = False
-
-            threading.Thread(target=load_task, daemon=True).start()
+            threading.Thread(target=_init_crawler, daemon=True).start()
 
     return _crawler_cache
+
+
+# Kick off loading immediately when gunicorn/Flask starts
+threading.Thread(target=_init_crawler, daemon=True).start()
+
+# ── Routes ────────────────────────────────────────────────────────
 
 @app.route("/")
 def home():
     if not _crawler_cache:
-        status = "Loading..." if _is_loading else "Idle"
+        status = "Loading basic list…" if _is_loading else "Idle"
     elif not _details_loaded:
-        status = f"Basic list ready ({len(_crawler_cache.movies)} movies) — loading genres & details..."
+        status = (
+            f"Basic list ready ({len(_crawler_cache.movies)} movies)"
+            " — loading genres & details…"
+        )
     else:
         status = f"Fully ready ({len(_crawler_cache.movies)} movies with genres)"
     return jsonify({
-        "message": "Backend is running successfully!",
+        "message": "Backend is running!",
         "database_status": status,
-        "details_loaded": _details_loaded
+        "details_loaded": _details_loaded,
     })
+
 
 @app.route("/movies")
 def get_movies():
     crawler = get_crawler()
     if not crawler:
-        return jsonify({"message": "Server is warming up, please refresh in a few seconds...", "loading": True}), 503
+        return jsonify({"message": "Server is warming up, please try again shortly.", "loading": True}), 503
 
     search       = (request.args.get("search")      or "").strip().lower()
     genre_filter = (request.args.get("genre")       or "").strip()
@@ -121,6 +199,7 @@ def get_movies():
 
     return jsonify([format_movie_brief(m) for m in results])
 
+
 @app.route("/movies/<movie_id>")
 def get_movie(movie_id):
     crawler = get_crawler()
@@ -139,23 +218,26 @@ def get_movie(movie_id):
 
     return jsonify(format_movie_detail(movie))
 
+
 @app.route("/movies/trending")
 def get_trending():
     crawler = get_crawler()
     if not crawler:
-        return jsonify([]), 200 # Return empty list so frontend doesn't crash while loading
-    
+        return jsonify([]), 200
     top = sorted(crawler.movies, key=lambda x: x.get("rating") or 0, reverse=True)[:10]
     return jsonify([format_movie_brief(m) for m in top])
+
 
 @app.route("/movies/new-arrivals")
 def get_new_arrivals():
     crawler = get_crawler()
     if not crawler:
         return jsonify([]), 200
-        
     recent = sorted(crawler.movies, key=lambda x: x.get("year") or 0, reverse=True)[:10]
     return jsonify([format_movie_brief(m) for m in recent])
+
+
+# ── Formatters ────────────────────────────────────────────────────
 
 def format_movie_brief(m: dict) -> dict:
     return {
@@ -167,6 +249,7 @@ def format_movie_brief(m: dict) -> dict:
         "genres":   m.get("genres", []),
         "language": m.get("country", ""),
     }
+
 
 def format_movie_detail(movie: dict) -> dict:
     directors = movie.get("director", [])
@@ -188,10 +271,14 @@ def format_movie_detail(movie: dict) -> dict:
         "backdrop":    movie.get("poster"),
         "plot":        movie.get("plot"),
         "cast": [
-            {"name": actor, "img": f"https://ui-avatars.com/api/?name={actor.replace(' ', '+')}&background=333&color=fff&size=150"}
+            {
+                "name": actor,
+                "img": f"https://ui-avatars.com/api/?name={actor.replace(' ', '+')}&background=333&color=fff&size=150",
+            }
             for actor in movie.get("cast", [])
         ],
     }
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

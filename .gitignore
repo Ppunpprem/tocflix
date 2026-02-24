@@ -22,3 +22,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Python
+__pycache__/
+*.py[cod]
+backend/venv/
+
+# Backend runtime cache (generated on Render, do not commit)
+backend/movies_cache.json
