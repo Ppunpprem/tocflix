@@ -267,28 +267,16 @@ class IMDbMovieCrawler:
         
         return movie
     
-    def fetch_movies_details_parallel(self, movies: List[dict], max_workers: int = 10) -> None:
-        """Fetch details for multiple movies in parallel using multithreading"""
-        movies_to_fetch = [m for m in movies if not m.get('details_fetched')]
+    def fetch_movies_details_parallel(self, movies: List[dict], max_workers: int = 2) -> None:
+        """Fetch details for movies (Limited for memory safety)"""
+        # Strictly limited to 2 workers to avoid memory spikes on Render free tier
+        movies_to_fetch = [m for m in movies if not m.get('details_fetched')][:10]
         
         if not movies_to_fetch:
             return
-        
-        total = len(movies_to_fetch)
-        print(f"\nFetching details for {total} movies using {max_workers} parallel threads...")
-        
-        completed = 0
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all tasks
-            future_to_movie = {executor.submit(self.fetch_movie_details, movie): movie for movie in movies_to_fetch}
             
-            # Process results as they complete
-            for future in as_completed(future_to_movie):
-                completed += 1
-                if completed % 10 == 0 or completed == total:
-                    print(f"  Progress: {completed}/{total} movies fetched ({int(completed/total*100)}%)")
-        
-        print(f"✓ Completed fetching details for {total} movies\n")
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            executor.map(self.fetch_movie_details, movies_to_fetch)
     
     def filter_movies(self, filters: dict) -> List[dict]:
         """Filter movies based on user criteria"""
