@@ -158,7 +158,7 @@ def home():
 def get_movies():
     crawler = get_crawler()
     if not crawler:
-        return jsonify({"message": "Server is warming up, please try again shortly.", "loading": True}), 503
+        return jsonify([]), 200  # Return empty list while warming up (consistent with /trending and /new-arrivals)
 
     search       = (request.args.get("search")      or "").strip().lower()
     genre_filter = (request.args.get("genre")       or "").strip()

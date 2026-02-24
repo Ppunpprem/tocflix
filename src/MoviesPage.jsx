@@ -274,12 +274,28 @@ export default function MoviesPage() {
     if (urlGenre) setSelectedGenres([urlGenre])
   }, [urlGenre])
 
-  // Fetch ALL movies once on mount
+  // Fetch ALL movies — retry every 5s if backend is still warming up
   useEffect(() => {
-    fetch(`${API}/movies`)
-      .then(res => res.json())
-      .then(data => { setMovies(data); setLoading(false) })
-      .catch(err => { console.error("Error fetching movies:", err); setLoading(false) })
+    let retryTimer
+    const load = () => {
+      fetch(`${API}/movies`)
+        .then(res => res.json())
+        .then(data => {
+          if (Array.isArray(data)) {
+            setMovies(data)
+            setLoading(false)
+          } else {
+            // Backend warming up — retry in 5s
+            retryTimer = setTimeout(load, 5000)
+          }
+        })
+        .catch(err => {
+          console.error("Error fetching movies:", err)
+          retryTimer = setTimeout(load, 5000)
+        })
+    }
+    load()
+    return () => clearTimeout(retryTimer)
   }, [])
 
   const toggleGenre = (g) =>

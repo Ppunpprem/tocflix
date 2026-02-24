@@ -319,33 +319,41 @@ export default function HomePage() {
   const [loading,     setLoading]     = useState(true);
 
   useEffect(() => {
+    let retryTimer
     const fetchAll = async () => {
       try {
-        // Fetch trending (top rated) and new arrivals in parallel
         const [trendingRes, newRes, allRes] = await Promise.all([
           fetch(`${API}/movies/trending`),
           fetch(`${API}/movies/new-arrivals`),
           fetch(`${API}/movies`),
-        ]);
+        ])
 
         const [trendingData, newData, allData] = await Promise.all([
           trendingRes.json(),
           newRes.json(),
           allRes.json(),
-        ]);
+        ])
 
-        setTrending(trendingData);
-        setNewArrival(newData);
-        setAllMovies(allData);
+        // Guard: if backend is warming up it returns an object, not an array — retry
+        if (!Array.isArray(allData)) {
+          retryTimer = setTimeout(fetchAll, 5000)
+          return
+        }
+
+        setTrending(Array.isArray(trendingData)  ? trendingData  : [])
+        setNewArrival(Array.isArray(newData)      ? newData       : [])
+        setAllMovies(Array.isArray(allData)       ? allData       : [])
       } catch (err) {
-        console.error("Failed to fetch movies:", err);
+        console.error("Failed to fetch movies:", err)
+        retryTimer = setTimeout(fetchAll, 5000)
       } finally {
-        setLoading(false);
+        setLoading(false)
       }
-    };
+    }
 
-    fetchAll();
-  }, []);
+    fetchAll()
+    return () => clearTimeout(retryTimer)
+  }, [])
 
   const handleMovieClick = (movie) => navigate(`/movies/${movie.id}`);
   const handleSeeMore    = ()      => navigate("/movies");
