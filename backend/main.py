@@ -6,7 +6,7 @@ import threading
 
 # we need to set up the crawler and fetch movies before we can serve them through the API
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 #only crawl imdb once per server run
 _cache_lock   = threading.Lock()
