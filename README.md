@@ -1,6 +1,6 @@
 # 🎬TOCFLIX
 
-A movie browsing website built with Python Flask (backend) and React + Vite (frontend). Movie data is scraped from the IMDb Top 250 using a custom web crawler built with requests and BeautifulSoup4.
+A movie browsing website built with Python Flask (backend) and React + Vite (frontend). Movie data is scraped from the IMDb Top 150 using a custom web crawler built with requests and BeautifulSoup4.
 
 # 📋Prerequisites
 
