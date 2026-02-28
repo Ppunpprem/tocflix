@@ -144,7 +144,7 @@ function FilterPanel({
         <h3 style={{ fontSize: '13px', fontWeight: 700, color: '#fff', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
           Genres
         </h3>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '260px', overflowY: 'auto', paddingRight: '4px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '180px', overflowY: 'auto', paddingRight: '4px' }}>
           {ALL_GENRES.map(g => (
             <label key={g} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', color: selectedGenres.includes(g) ? '#fff' : '#aaa' }}>
               <input
@@ -209,13 +209,13 @@ function FilterPanel({
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <input
             type="range"
-            min="7" max="10" step="0.1"
-            value={minRating || 7}
+            min="1" max="10" step="0.1"
+            value={minRating || 1}
             onChange={e => setMinRating(e.target.value)}
             style={{ flex: 1, accentColor: '#e50914' }}
           />
           <span style={{ color: '#f5c518', fontWeight: 700, fontSize: '14px', minWidth: '32px' }}>
-            {minRating || '7.0'}
+            {minRating || '1.0'}
           </span>
         </div>
         {minRating && (
@@ -274,26 +274,12 @@ export default function MoviesPage() {
     if (urlGenre) setSelectedGenres([urlGenre])
   }, [urlGenre])
 
-  // Fetch ALL movies once on mount \u2014 retry if backend is still warming up
+  // Fetch ALL movies once on mount
   useEffect(() => {
-    let cancelled = false
-    const fetchMovies = async () => {
-      try {
-        const res = await fetch(`${API}/movies`)
-        if (res.status === 503) {
-          // Backend still warming up — retry in 3s, keep skeleton showing
-          if (!cancelled) setTimeout(fetchMovies, 3000)
-          return
-        }
-        const data = await res.json()
-        if (!cancelled) { setMovies(Array.isArray(data) ? data : []); setLoading(false) }
-      } catch (err) {
-        console.error("Error fetching movies:", err)
-        if (!cancelled) setTimeout(fetchMovies, 3000) // retry on network error
-      }
-    }
-    fetchMovies()
-    return () => { cancelled = true }
+    fetch(`${API}/movies`)
+      .then(res => res.json())
+      .then(data => { setMovies(data); setLoading(false) })
+      .catch(err => { console.error("Error fetching movies:", err); setLoading(false) })
   }, [])
 
   const toggleGenre = (g) =>
@@ -368,6 +354,13 @@ export default function MoviesPage() {
 
   return (
     <div style={{ minHeight: '100vh', background: '#141414', color: '#fff', fontFamily: 'sans-serif' }}>
+      <style>{`
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #3a3a3a; border-radius: 999px; }
+        ::-webkit-scrollbar-thumb:hover { background: #e50914; }
+        * { scrollbar-width: thin; scrollbar-color: #3a3a3a transparent; }
+      `}</style>
       <Navbar />
 
       {/*Mobile Filter Drawer*/}
@@ -414,7 +407,7 @@ export default function MoviesPage() {
         )}
 
         {/*Main content */}
-        <main style={{ flex: 1, padding: isMobile ? '20px 16px' : '32px 32px', overflowY: 'auto' }}>
+        <main style={{ flex: 1, padding: isMobile ? '20px 16px' : '32px 32px', overflowY: 'auto', background: '#141414' }}>
 
           {/* Header row */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
