@@ -1,8 +1,8 @@
-🎬TOCFLIX
+# 🎬TOCFLIX
 
 A movie browsing website built with Python Flask (backend) and React + Vite (frontend). Movie data is scraped from the IMDb Top 250 using a custom web crawler built with requests and BeautifulSoup4.
 
-📋Prerequisites
+# 📋Prerequisites
 
 Make sure you have the following installed:
 Tool                  Version
@@ -10,7 +10,7 @@ Python                3.10 or higher
 Node.js               20 or higher
 npm                   9 or higher
 
-📁 Project Structure
+# 📁 Project Structure
 
 tocflix/
 ├── backend/
@@ -29,7 +29,7 @@ tocflix/
 ├── package.json
 └── vite.config.js
 
-🚀 How to Run Locally
+# 🚀 How to Run Locally
 
 1. Clone the repository
 git clone https://github.com/Ppunpprem/tocflix.git
@@ -53,7 +53,7 @@ npm install
 npm run dev
 The frontend will be running at: http://localhost:5173/tocflix/
 
-🔄 Re-crawl IMDb Data
+# 🔄 Re-crawl IMDb Data
 If you want to refresh the movie data (e.g. after updating the crawler):
 # Windows
 del backend\movies_cache.json
@@ -62,13 +62,13 @@ del backend\movies_cache.json
 rm backend/movies_cache.json
 Then restart the backend with python main.py.
 
-🌐 API Endpoints
+# 🌐 API Endpoints
 MethodEndpointDescriptionGET/moviesGet all movies (supports filters)GET/movies/<id>Get full detail for one movieGET/movies/trendingTop 10 highest ratedGET/movies/new-arrivalsTop 10 most recent
 
 Query parameters for /movies:
 ParamExampleDescriptionsearch?search=godfatherSearch by title, genre, countrygenre?genre=DramaFilter by genreyear?year=1994Filter by exact yearyear_from?year_from=2000Filter from yearyear_to?year_to=2010Filter to yearmin_rating?min_rating=8.5Filter by minimum IMDb ratingsort?sort=imdb_top10Return top 10 by rating
 
-🛠 Tech Stack
+# 🛠 Tech Stack
 Backend
 
 Python 3.10+
