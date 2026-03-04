@@ -104,11 +104,12 @@ export default function Navbar() {
                 value={searchQuery}
                 onChange={(e) => {
                   setSearchQuery(e.target.value);
-                  if (pathname === '/movies') {
-                    navigate(e.target.value.trim()
-                      ? `/movies?search=${encodeURIComponent(e.target.value.trim())}`
-                      : '/movies',
-                      { replace: true }   // ← this is the key fix — replaces history instead of pushing
+                  if (pathname === "/movies") {
+                    navigate(
+                      e.target.value.trim()
+                        ? `/movies?search=${encodeURIComponent(e.target.value.trim())}`
+                        : "/movies",
+                      { replace: true }, // ← this is the key fix — replaces history instead of pushing
                     );
                   }
                 }}

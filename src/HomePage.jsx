@@ -6,9 +6,9 @@ import { API_BASE_URL as API } from "./config";
 
 // Genre config  colours only posters come from real movie data
 const GENRE_CONFIG = [
-  { label: "Action",    color: "bg-red-600"    },
-  { label: "Drama",     color: "bg-purple-600" },
-  { label: "Comedy",    color: "bg-green-500"  },
+  { label: "Action", color: "bg-red-600" },
+  { label: "Drama", color: "bg-purple-600" },
+  { label: "Comedy", color: "bg-green-500" },
   { label: "Adventure", color: "bg-yellow-500" },
 ];
 
@@ -52,7 +52,13 @@ function MovieCard({ movie, onMovieClick }) {
         </p>
         <div className="flex items-center gap-2 pt-1">
           {movie.rating != null && (
-            <ImdbBadge score={typeof movie.rating === "number" ? movie.rating.toFixed(1) : movie.rating} />
+            <ImdbBadge
+              score={
+                typeof movie.rating === "number"
+                  ? movie.rating.toFixed(1)
+                  : movie.rating
+              }
+            />
           )}
         </div>
       </div>
@@ -60,7 +66,7 @@ function MovieCard({ movie, onMovieClick }) {
   );
 }
 
-// Skeleton Card 
+// Skeleton Card
 function SkeletonCard() {
   return (
     <div className="flex-shrink-0 w-[140px] sm:w-[160px] md:w-[175px] lg:w-[190px] animate-pulse">
@@ -78,13 +84,16 @@ function SkeletonCard() {
 function ScrollRow({ title, items, loading, onMovieClick, onSeeMore }) {
   const ref = useRef(null);
   const scroll = (dir) => {
-    if (ref.current) ref.current.scrollBy({ left: dir * 400, behavior: "smooth" });
+    if (ref.current)
+      ref.current.scrollBy({ left: dir * 400, behavior: "smooth" });
   };
 
   return (
     <section className="mb-10">
       <div className="flex items-center justify-between px-4 mb-4 sm:px-6 md:px-10">
-        <h2 className="text-lg font-bold text-white sm:text-xl md:text-2xl">{title}</h2>
+        <h2 className="text-lg font-bold text-white sm:text-xl md:text-2xl">
+          {title}
+        </h2>
         <button
           onClick={onSeeMore}
           style={{ background: "none", border: "none", color: "#e50914" }}
@@ -113,7 +122,11 @@ function ScrollRow({ title, items, loading, onMovieClick, onSeeMore }) {
           {loading
             ? Array.from({ length: 8 }).map((_, i) => <SkeletonCard key={i} />)
             : items.map((movie) => (
-                <MovieCard key={movie.id} movie={movie} onMovieClick={onMovieClick} />
+                <MovieCard
+                  key={movie.id}
+                  movie={movie}
+                  onMovieClick={onMovieClick}
+                />
               ))}
         </div>
 
@@ -130,7 +143,7 @@ function ScrollRow({ title, items, loading, onMovieClick, onSeeMore }) {
   );
 }
 
-// Genre Card 
+// Genre Card
 function GenreCard({ genre, genreMovies, onGenreClick }) {
   // Pick up to 4 posters from real data for this genre
   const posters = genreMovies
@@ -145,30 +158,28 @@ function GenreCard({ genre, genreMovies, onGenreClick }) {
     >
       {/* 2×2 poster grid */}
       <div className="absolute inset-0 grid grid-cols-2 grid-rows-2">
-        {posters.length >= 4 ? (
-          posters.map((src, i) => (
-            <img
-              key={i}
-              src={src}
-              alt=""
-              className="object-cover w-full h-full transition-transform duration-500 group-hover:scale-105"
-            />
-          ))
-        ) : (
-          // Fallback show available posters or placeholder blocks
-          Array.from({ length: 4 }).map((_, i) =>
-            posters[i] ? (
+        {posters.length >= 4
+          ? posters.map((src, i) => (
               <img
                 key={i}
-                src={posters[i]}
+                src={src}
                 alt=""
                 className="object-cover w-full h-full transition-transform duration-500 group-hover:scale-105"
               />
-            ) : (
-              <div key={i} className="bg-gray-800" />
-            )
-          )
-        )}
+            ))
+          : // Fallback show available posters or placeholder blocks
+            Array.from({ length: 4 }).map((_, i) =>
+              posters[i] ? (
+                <img
+                  key={i}
+                  src={posters[i]}
+                  alt=""
+                  className="object-cover w-full h-full transition-transform duration-500 group-hover:scale-105"
+                />
+              ) : (
+                <div key={i} className="bg-gray-800" />
+              ),
+            )}
       </div>
 
       <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/25 to-transparent" />
@@ -179,7 +190,9 @@ function GenreCard({ genre, genreMovies, onGenreClick }) {
           >
             Top 10 In
           </span>
-          <p className="mt-1 text-sm font-bold text-white sm:text-base">{genre.label}</p>
+          <p className="mt-1 text-sm font-bold text-white sm:text-base">
+            {genre.label}
+          </p>
         </div>
         <div className="flex items-center justify-center text-sm text-white transition-colors border rounded-full w-7 h-7 bg-white/10 border-white/20 group-hover:bg-white/20">
           →
@@ -189,7 +202,7 @@ function GenreCard({ genre, genreMovies, onGenreClick }) {
   );
 }
 
-//Hero 
+//Hero
 function Hero({ movies, loading, onMovieClick }) {
   const [idx, setIdx] = useState(0);
   const [visible, setVisible] = useState(true);
@@ -212,7 +225,10 @@ function Hero({ movies, loading, onMovieClick }) {
   const goTo = (i) => {
     if (i === idx) return;
     setVisible(false);
-    setTimeout(() => { setIdx(i); setVisible(true); }, 400);
+    setTimeout(() => {
+      setIdx(i);
+      setVisible(true);
+    }, 400);
   };
 
   if (loading || heroMovies.length === 0) {
@@ -236,7 +252,7 @@ function Hero({ movies, loading, onMovieClick }) {
         style={{ opacity: visible ? 1 : 0, transition: "opacity 0.4s ease" }}
       >
         <img
-          src={movie.backdrop ||movie.poster}
+          src={movie.backdrop || movie.poster}
           alt={movie.title}
           className="object-cover object-top w-full h-full"
         />
@@ -254,7 +270,13 @@ function Hero({ movies, loading, onMovieClick }) {
         </h1>
 
         <div className="flex flex-wrap items-center gap-2 mb-2 sm:gap-4 sm:mb-3">
-          <ImdbBadge score={typeof movie.rating === "number" ? movie.rating.toFixed(1) : movie.rating} />
+          <ImdbBadge
+            score={
+              typeof movie.rating === "number"
+                ? movie.rating.toFixed(1)
+                : movie.rating
+            }
+          />
           <span className="text-[11px] sm:text-sm text-gray-400 font-semibold tracking-wide">
             {movie.year} {movie.country}
           </span>
@@ -281,7 +303,12 @@ function Hero({ movies, loading, onMovieClick }) {
 
         <button
           onClick={() => onMovieClick && onMovieClick(movie)}
-          style={{ backgroundColor: "#e50914", color: "#fff", border: "none", cursor: "pointer" }}
+          style={{
+            backgroundColor: "#e50914",
+            color: "#fff",
+            border: "none",
+            cursor: "pointer",
+          }}
           className="text-white text-xs sm:text-sm font-bold px-4 sm:px-7 py-1.5 sm:py-2.5 rounded-lg w-fit transition-colors duration-200 tracking-wide hover:opacity-90"
         >
           See More
@@ -301,9 +328,15 @@ function Hero({ movies, loading, onMovieClick }) {
               height: "3px",
               width: i === idx ? "14px" : "5px",
               background: i === idx ? "white" : "rgba(255,255,255,0.3)",
-              padding: 0, margin: 0, border: "none", outline: "none",
-              cursor: "pointer", borderRadius: "999px",
-              transition: "all 0.3s ease", display: "block", flexShrink: 0,
+              padding: 0,
+              margin: 0,
+              border: "none",
+              outline: "none",
+              cursor: "pointer",
+              borderRadius: "999px",
+              transition: "all 0.3s ease",
+              display: "block",
+              flexShrink: 0,
             }}
           />
         ))}
@@ -316,12 +349,12 @@ function Hero({ movies, loading, onMovieClick }) {
 export default function HomePage() {
   const navigate = useNavigate();
 
-  const [trending,    setTrending]    = useState([]);
-  const [newArrival,  setNewArrival]  = useState([]);
-  const [allMovies,   setAllMovies]   = useState([]);
-  const [loading,     setLoading]     = useState(true);
+  const [trending, setTrending] = useState([]);
+  const [newArrival, setNewArrival] = useState([]);
+  const [allMovies, setAllMovies] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  const [warming,     setWarming]     = useState(false);
+  const [warming, setWarming] = useState(false);
   useEffect(() => {
     const fetchAll = async () => {
       try {
@@ -352,7 +385,7 @@ export default function HomePage() {
   }, []);
 
   const handleMovieClick = (movie) => navigate(`/movies/${movie.id}`);
-  const handleSeeMore    = ()      => navigate("/movies");
+  const handleSeeMore = () => navigate("/movies");
   const handleGenreClick = (genre) =>
     navigate(`/movies?sort=imdb_top10&genre=${encodeURIComponent(genre)}`);
 
@@ -360,14 +393,15 @@ export default function HomePage() {
   const genreMoviesMap = {};
   for (const cfg of GENRE_CONFIG) {
     genreMoviesMap[cfg.label] = allMovies
-      .filter((m) =>
-        Array.isArray(m.genres) &&
-        m.genres.some((g) => g.toLowerCase() === cfg.label.toLowerCase())
+      .filter(
+        (m) =>
+          Array.isArray(m.genres) &&
+          m.genres.some((g) => g.toLowerCase() === cfg.label.toLowerCase()),
       )
       .slice(0, 4);
   }
 
-  // heroMovies from allMovies sorted by rating 
+  // heroMovies from allMovies sorted by rating
   const [heroMovies, setHeroMovies] = useState([]);
 
   useEffect(() => {
@@ -378,9 +412,11 @@ export default function HomePage() {
 
     // Fetch full details for each hero movie to get plot
     Promise.all(
-      top5.map(m =>
-        fetch(`${API}/movies/${m.id}`).then(r => r.json()).catch(() => m)
-      )
+      top5.map((m) =>
+        fetch(`${API}/movies/${m.id}`)
+          .then((r) => r.json())
+          .catch(() => m),
+      ),
     ).then(setHeroMovies);
   }, [allMovies]);
 
@@ -390,14 +426,21 @@ export default function HomePage() {
       style={{ background: "#111", overflowX: "clip" }}
     >
       <Navbar />
-      
+
       {/* Warming-up banner */}
       {warming && (
-        <div style={{
-          background: "#1a1a2e", borderBottom: "1px solid #e5091422",
-          padding: "10px 20px", textAlign: "center", fontSize: "13px", color: "#aaa"
-        }}>
-          ⏳ Server warming up, loading movies… this takes ~30 seconds on first visit.
+        <div
+          style={{
+            background: "#1a1a2e",
+            borderBottom: "1px solid #e5091422",
+            padding: "10px 20px",
+            textAlign: "center",
+            fontSize: "13px",
+            color: "#aaa",
+          }}
+        >
+          ⏳ Server warming up, loading movies… this takes ~30 seconds on first
+          visit.
         </div>
       )}
 
