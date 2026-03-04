@@ -14,7 +14,6 @@ const ALL_GENRES = [
   "Crime",
   "Drama",
   "Fantasy",
-  "Film-Noir",
   "History",
   "Horror",
   "Music",
@@ -544,10 +543,10 @@ export default function MoviesPage() {
         if (!matchesTitle && !matchesGenre && !matchesLanguage) return false;
       }
 
-      // Genre checkboxes
+      // Genre checkboxes — movie must have ALL selected genres (AND logic)
       if (selectedGenres.length > 0) {
         const movieGenres = (m.genres || []).map((g) => g.toLowerCase());
-        if (!selectedGenres.some((g) => movieGenres.includes(g.toLowerCase())))
+        if (!selectedGenres.every((g) => movieGenres.includes(g.toLowerCase())))
           return false;
       }
 
