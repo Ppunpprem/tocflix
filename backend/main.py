@@ -20,12 +20,16 @@ def get_crawler() -> IMDbMovieCrawler:
     global _crawler_cache
     with _cache_lock:
         if _crawler_cache is None:
-            print("Cold-start: fetching IMDb Top 150 …")
+            print("🚀 [Cloud Run Cold-start] Fetching IMDb Top 150 list...")
             c = IMDbMovieCrawler()
-            c.fetch_top_movies()                                   # list of 150
-            c.fetch_movies_details_parallel(c.movies, max_workers=20)# all details
+            success = c.fetch_top_movies() # list of 150
+            if not success:
+                print("❌ Failed to fetch movie list. Retrying or using partial data...")
+            
+            print(f"📊 Extracted {len(c.movies)} movies from list. Now fetching details in parallel...")
+            c.fetch_movies_details_parallel(c.movies, max_workers=20) # all details
             _crawler_cache = c
-            print(f"Cache ready — {len(c.movies)} movies loaded")
+            print(f"✅ Cache ready — {len(c.movies)} movies loaded with full details.")
         return _crawler_cache
 
 
@@ -162,6 +166,7 @@ def get_movie(movie_id):
 
     # details might not have been fetched for all movies during initial crawl to save time
     if not movie.get("details_fetched"):
+        print(f"🔍 On-demand fetching details for: {movie_id} ({movie.get('title')})")
         movie = crawler.fetch_movie_details(movie)
 
     return jsonify(format_movie_detail(movie))

@@ -9,7 +9,7 @@ from typing import List, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 CACHE_FILE = os.path.join(os.path.dirname(__file__), "movies_cache.json")
-CACHE_VERSION = "3"
+CACHE_VERSION = "5"
 
 class IMDbMovieCrawler:
     def __init__(self):
@@ -187,19 +187,30 @@ class IMDbMovieCrawler:
         soup = BeautifulSoup(html, 'html.parser')
         
         # Try JSON-LD extraction first coz to be faster
+        # Try JSON-LD extraction first coz to be faster
         script_tags = soup.find_all('script', type='application/ld+json')
         for script in script_tags:
             try:
                 data = json.loads(script.string)
                 if isinstance(data, dict) and 'itemListElement' in data:
                     self._extract_from_json(data)
-                    return True
+                    # We don't return here anymore, but continue to HTML to supplement
+                    break
             except Exception:
                 continue
         
-        # Fallback to HTML parsing
+        # Supplemental HTML parsing for Year, Runtime, Certificate from Chart rows
+        print("Running HTML extraction for supplementary data...")
         self._extract_from_html(soup)
-        return len(self.movies) > 0
+        
+        if len(self.movies) > 0:
+            # Sort by rank and limit
+            self.movies.sort(key=lambda x: x.get('rank', 999))
+            self.movies = self.movies[:150]
+            self.save_cache()
+            return True
+            
+        return False
     
     def _extract_from_json(self, data: dict):
         """Extract movies from JSON-LD structured data"""
@@ -229,12 +240,45 @@ class IMDbMovieCrawler:
                 if rating_data.get('ratingValue'):
                     movie_data['rating'] = float(rating_data['ratingValue'])
 
-                desc = movie_item.get('description', '')
-                if desc:
-                    year = self.extract_year(desc)
-                    if year:
-                        movie_data['year'] = year
-                
+                # Enhanced extraction from JSON-LD
+                if movie_item.get('genre'):
+                    raw_genre = movie_item['genre']
+                    if isinstance(raw_genre, list):
+                        movie_data['genres'] = raw_genre
+                    else:
+                        # re: split by comma and clean
+                        movie_data['genres'] = [g.strip() for g in re.split(r',', str(raw_genre))]
+
+                if movie_item.get('description'):
+                    movie_data['plot'] = movie_item['description']
+                    # Try to get year from description if missing
+                    if not movie_data.get('year'):
+                        year = self.extract_year(movie_item['description'])
+                        if year:
+                            movie_data['year'] = year
+
+                if movie_item.get('contentRating'):
+                    movie_data['certificate'] = self.normalize_certificate(movie_item['contentRating'])
+
+                if movie_item.get('duration'):
+                    # ISO 8601 duration: PT2H22M
+                    dur = movie_item['duration']
+                    movie_data['runtime_iso'] = dur
+                    # re: extract hours and minutes
+                    hm = re.search(r'PT(?:(?P<h>\d+)H)?(?:(?P<m>\d+)M)?', dur)
+                    if hm:
+                        h = int(hm.group('h') or 0)
+                        m = int(hm.group('m') or 0)
+                        total_mins = h * 60 + m
+                        if total_mins > 0:
+                            movie_data['runtime_minutes'] = total_mins
+                            movie_data['runtime'] = f"{h}h {m}m" if h > 0 else f"{m}min"
+
+                # Mark as partially fetched so we don't ALWAYS need to visit detail page
+                # but we'll still call it a fetch if we have genres and plot
+                if movie_data.get('genres') and movie_data.get('plot'):
+                    movie_data['details_fetched'] = True
+
                 self.movies.append(movie_data)
                 if movie_data.get('id'):
                     self.movies_dict[movie_data['id']] = movie_data
@@ -248,51 +292,93 @@ class IMDbMovieCrawler:
         print(f"Extracted {len(self.movies)} movies\n")
     
     def _extract_from_html(self, soup: BeautifulSoup):
-        """Fallback HTML extraction method"""
-        movie_items = soup.find_all('li', class_=re.compile(r'ipc-metadata-list-summary-item'))
+        """Standard HTML scraping from the Top 250 chart page"""
+        # Select all movie rows
+        rows = soup.select('li.ipc-metadata-list-summary-item')
+        print(f"Found {len(rows)} movie rows. Extracting metadata...")
         
-        print(f"Found {len(movie_items)} movie items. Extracting...\n")
-        
-        for idx, item in enumerate(movie_items, 1):
+        for i, row in enumerate(rows):
             try:
-                movie_data = {'rank': idx}
-
-                title_elem = item.find('h3', class_=re.compile(r'ipc-title'))
-                if title_elem:
-                    movie_data['title'] = self.clean_title(title_elem.get_text(strip=True))
-
-                link = item.find('a', href=re.compile(r'/title/tt\d+/'))
-                if link and link.get('href'):
-                    movie_data['url'] = f"https://www.imdb.com{link['href']}"
-                    movie_data['id']  = self.extract_movie_id(movie_data['url'])
-
-                img = item.find('img', class_='ipc-image')
-                if img and img.get('src'):
-                    movie_data['poster'] = img['src']
-
-                for meta in item.find_all('span', class_=re.compile(r'cli-title-metadata-item')):
-                    text = meta.get_text(strip=True)
-                    if re.match(r'^\d{4}$', text):
-                        movie_data['year'] = int(text)
-
-                rating_elem = item.find('span', class_=re.compile(r'ipc-rating-star'))
-                if rating_elem:
-                    rm = re.search(r'(\d+\.?\d*)', rating_elem.get_text(strip=True)) #<-- here regular lang
-                    if rm:
-                        movie_data['rating'] = float(rm.group(1))
+                # Title and ID extraction
+                title_elem = row.select_one('h3.ipc-title__text')
+                url_elem = row.select_one('a.ipc-title-link-wrapper')
                 
-                if 'title' in movie_data:
-                    self.movies.append(movie_data)
-                    if movie_data.get('id'):
-                        self.movies_dict[movie_data['id']] = movie_data
+                if not title_elem or not url_elem:
+                    continue
                     
+                raw_title = title_elem.get_text(strip=True)
+                title = self.clean_title(raw_title)
+                movie_url = "https://www.imdb.com" + url_elem.get('href', '').split('?')[0]
+                movie_id = self.extract_movie_id(movie_url)
+                
+                if not movie_id:
+                    continue
+
+                # Use existing data from JSON-LD if available, otherwise create new
+                movie_data = self.movies_dict.get(movie_id)
+                if not movie_data:
+                    movie_data = {
+                        'id': movie_id,
+                        'title': title,
+                        'url': movie_url,
+                        'rank': i + 1
+                    }
+                    self.movies.append(movie_data)
+                    self.movies_dict[movie_id] = movie_data
+
+                # Metadata extraction (Year, Runtime, Certificate)
+                # re: find all cli-title-metadata-item spans
+                metadata_items = row.select('span.cli-title-metadata-item')
+                for item in metadata_items:
+                    text = item.get_text(strip=True)
+                    
+                    # 1. Year: exactly 4 digits
+                    if not movie_data.get('year'):
+                        y = self.extract_year(text)
+                        if y:
+                            movie_data['year'] = y
+                            continue
+                    
+                    # 2. Runtime: e.g., "2h 22m" or "121m"
+                    if 'h' in text.lower() or 'm' in text.lower():
+                        if not movie_data.get('runtime'):
+                            movie_data['runtime'] = text
+                            # re: parse runtime to minutes
+                            rm = re.search(r'(?:(?P<h>\d+)h)?\s*(?:(?P<m>\d+)m|min)?', text.lower())
+                            if rm:
+                                h = int(rm.group('h') or 0)
+                                m = int(rm.group('m') or 0)
+                                movie_data['runtime_minutes'] = h * 60 + m
+                            continue
+                    
+                    # 3. Certificate: typically remaining short item like "R", "PG-13"
+                    if len(text) < 10 and not movie_data.get('certificate'):
+                        # re: ensure it's not a year
+                        if not re.match(r'^\d{4}$', text) and 'h' not in text.lower():
+                            movie_data['certificate'] = self.normalize_certificate(text)
+
+                # Rating (fallback if JSON-LD missed it)
+                rating_elem = row.select_one('span.ipc-rating-star--rating')
+                if rating_elem and not movie_data.get('rating'):
+                    try:
+                        movie_data['rating'] = float(rating_elem.get_text(strip=True))
+                    except:
+                        pass
+                
+                # Check for poster if missing
+                if not movie_data.get('poster'):
+                    img_elem = row.select_one('img.ipc-image')
+                    if img_elem:
+                        movie_data['poster'] = img_elem.get('src') or img_elem.get('data-src')
+
             except Exception as e:
-                print(f"Error parsing movie {idx}: {e}")
+                print(f"Error parsing row {i}: {e}")
                 continue
         
+        # Ensure we keep the limit
         self.movies = self.movies[:150]
         self.movies_dict = {m['id']: m for m in self.movies if m.get('id')}
-        print(f"Extracted {len(self.movies)} movies\n")
+        print(f"Final dataset: {len(self.movies)} movies\n")
     
     # this is fetch for detail page
     def fetch_movie_details(self, movie: dict) -> dict:
@@ -308,20 +394,22 @@ class IMDbMovieCrawler:
         
         # Extract year
         if not movie.get('year'):
-            year_elem = soup.select_one('[data-testid="hero-title-block__metadata"] a')
+            year_elem = soup.select_one('[data-testid="hero-title-block__metadata"] li:first-child a')
             if year_elem:
                 y = self.extract_year(year_elem.get_text())
                 if y:
                     movie['year'] = y
         
         # Extract genres
-        genres = []
-        for chip in soup.select('a.ipc-chip span.ipc-chip__text')[:10]:
-            g = chip.get_text(strip=True)
-            if g and len(g) < 20:
-                genres.append(g)
-        if genres:
-            movie['genres'] = genres
+        genres_container = soup.select_one('[data-testid="genres"]')
+        if genres_container:
+            genres_list = []
+            for chip in genres_container.select('a'):
+                g = chip.get_text(strip=True)
+                if g:
+                    genres_list.append(g)
+            if genres_list:
+                movie['genres'] = genres_list
         
         # Extract country
         country_elem = soup.select_one('[data-testid="title-details-origin"] a')
@@ -329,22 +417,9 @@ class IMDbMovieCrawler:
             movie['country'] = country_elem.get_text(strip=True)
         
         # Extract plot
-        plot_elem = (
-            soup.select_one('[data-testid="plot-xl"]') or
-            soup.select_one('[data-testid="plot-l"]') or
-            soup.select_one('[data-testid="plot-m"]') or
-            soup.select_one('[data-testid="plot-xs"]') or
-            soup.select_one('span[data-testid^="plot"]') or
-            soup.select_one('p[data-testid="plot"]') or
-            soup.select_one('.sc-e226b0e3-3') or
-            soup.select_one('[class*="GenresAndPlot"] span[role="presentation"]') or
-            soup.select_one('meta[name="description"]')
-        )
+        plot_elem = soup.select_one('[data-testid="plot-xl"]') or soup.select_one('[data-testid="plot"]')
         if plot_elem:
-            if plot_elem.name == 'meta':
-                movie['plot'] = plot_elem.get('content', '').strip()
-            else:
-                movie['plot'] = plot_elem.get_text(strip=True)
+            movie['plot'] = plot_elem.get_text(strip=True)
                 
             if not movie.get('language'):
                 detected = self.extract_language_from_text(movie['plot'])
@@ -354,34 +429,36 @@ class IMDbMovieCrawler:
         directors = []
         dir_section = soup.select_one('[data-testid="title-pc-principal-credit"]')
         if dir_section:
-            for a in dir_section.select('a.ipc-metadata-list-item__list-content-item'):
-                directors.append(a.get_text(strip=True))
+            # Modern IMDb often puts "Director" label followed by names
+            for a in dir_section.select('a[href*="/name/nm"]'):
+                name = a.get_text(strip=True)
+                if name:
+                    directors.append(name)
         if directors:
             movie['director'] = directors
         
         # Extract cast 
         cast = []
-        for item in soup.select('[data-testid="title-cast-item"]')[:5]:
+        for item in soup.select('[data-testid="title-cast-item"]')[:8]: # Increase to 8
             name_elem = item.select_one('[data-testid="title-cast-item__actor"]')
             if not name_elem:
                 continue
             name = name_elem.get_text(strip=True)
 
-            # Scrape actor photo from the cast card <img>
+            # Scrape actor photo
             img_url = ""
-            img_elem = item.select_one('img.ipc-image')
+            img_elem = item.select_one('img')
             if img_elem:
                 raw_src = img_elem.get('src') or img_elem.get('data-src') or ""
-                # re: resize IMDb thumbnail to a usable portrait size
-                # IMDb image URLs contain a size token like _UX32_CR0,0,32,44_
-                # We replace it with UX140 to get a proper headshot
-                clean_src = re.sub(
-                    r'_V1_.*?\.(jpg|jpeg|png|webp)',
-                    r'_V1_UX140_CR0,0,140,193_.\1',
-                    raw_src,
-                    flags=re.IGNORECASE
-                )   # here also regular lang
-                img_url = clean_src if clean_src else raw_src
+                # Maintain the user's regex logic for resizing
+                if raw_src:
+                    clean_src = re.sub(
+                        r'_V1_.*?\.(jpg|jpeg|png|webp)',
+                        r'_V1_UX140_CR0,0,140,193_.\1',
+                        raw_src,
+                        flags=re.IGNORECASE
+                    )
+                    img_url = clean_src if clean_src else raw_src
 
             cast.append({"name": name, "img": img_url})
 
