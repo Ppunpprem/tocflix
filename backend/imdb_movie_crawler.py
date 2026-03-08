@@ -9,7 +9,7 @@ from typing import List, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 CACHE_FILE = os.path.join(os.path.dirname(__file__), "movies_cache.json")
-CACHE_VERSION = "5"
+CACHE_VERSION = "6"
 
 class IMDbMovieCrawler:
     def __init__(self):
@@ -17,7 +17,21 @@ class IMDbMovieCrawler:
         self.movies = []
         self.movies_dict = {}  # Store movies by ID for quick lookup
         # Use cloudscraper to bypass IMDb Cloudflare protection (HTTP 202 errors)
-        self.scraper = cloudscraper.create_scraper()
+        self.scraper = cloudscraper.create_scraper(
+            browser={
+                'browser': 'chrome',
+                'platform': 'darwin',
+                'desktop': True
+            }
+        )
+        self.scraper.headers.update({
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Cache-Control': 'max-age=0',
+            'DNT': '1',
+            'Upgrade-Insecure-Requests': '1',
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        })
     
     #I add to load and save the cache
     def load_cache(self) -> bool:
@@ -388,9 +402,13 @@ class IMDbMovieCrawler:
 
         html = self.fetch_page(movie['url'])
         if not html:
+            print(f"FAILED to fetch: {movie['url']}")
             return movie
 
         soup = BeautifulSoup(html, 'html.parser')
+        print(f"HTML Length: {len(html)}")
+        if "Request blocked" in html or "Cloudflare" in html:
+            print("❌ BLOCKED by Cloudflare/Anti-bot")
         
         # Extract year
         if not movie.get('year'):
@@ -532,17 +550,36 @@ class IMDbMovieCrawler:
                 movie['metascore'] = int(sm.group(1))
         
         # Extract awards
-        awards_elem = soup.select_one('[data-testid="award_information"]')
-        if awards_elem:
-            awards_text = awards_elem.get_text(strip=True)
+        # Get the summary like "Won 3 Oscars"
+        awards_summary = soup.select_one('[data-testid="awards-link-category-with-total"]')
+        # Also try to get the detailed "31 wins & 31 nominations total"
+        awards_detail = soup.select_one('a[data-testid="award_information"] span.ipc-metadata-list-item__list-content-item') or \
+                        soup.select_one('.ipc-metadata-list-item--link .ipc-metadata-list-item__list-content span')
+        
+        awards_text = ""
+        if awards_summary:
+            awards_text = awards_summary.get_text(strip=True)
+        if awards_detail:
+            dt = awards_detail.get_text(strip=True)
+            if awards_text:
+                awards_text += " " + dt
+            else:
+                awards_text = dt
+        
+        if awards_text:
             movie['awards'] = awards_text
             movie['oscar_wins'] = self.extract_oscar_count(awards_text)
-            wins_m = re.search(r'(\d+)\s+win', awards_text, re.IGNORECASE) #<-- regular lang
-            noms_m = re.search(r'(\d+)\s+nomination', awards_text, re.IGNORECASE) #<-- regular lang
+            wins_m = re.search(r'(\d+)\s+win', awards_text, re.IGNORECASE) #re
+            noms_m = re.search(r'(\d+)\s+nomination', awards_text, re.IGNORECASE) #re
             if wins_m:
                 movie['total_wins'] = int(wins_m.group(1))
             if noms_m:
                 movie['total_nominations'] = int(noms_m.group(1))
+
+        # Extract Backdrop (Hero Slate)
+        backdrop_elem = soup.select_one('[data-testid="hero-media__slate"] img')
+        if backdrop_elem:
+            movie['backdrop'] = backdrop_elem.get('src') or backdrop_elem.get('data-src')
 
         movie['details_fetched'] = True
         time.sleep(0.3)   # <--delay

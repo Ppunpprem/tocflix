@@ -89,7 +89,7 @@ def format_movie_detail(movie: dict) -> dict:
         "releaseDate": movie.get("release_date"),
         "imdbScore":   f"{movie.get('rating', 'N/A')} / 10",
         "awardsInfo":  movie.get("awards"),
-        "backdrop":    movie.get("poster"),
+        "backdrop":    movie.get("backdrop") or movie.get("poster"),
         "plot":        movie.get("plot"),
         "cast":       cast_list,
     }
