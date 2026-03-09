@@ -1,3 +1,4 @@
+import re
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from imdb_movie_crawler import IMDbMovieCrawler
@@ -36,14 +37,15 @@ def get_crawler() -> IMDbMovieCrawler:
 def format_movie_brief(m: dict) -> dict:
     """Return the fields needed for the movie-grid cards."""
     return {
-        "id":       m.get("id"),
-        "title":    m.get("title"),
-        "year":     m.get("year"),
-        "rating":   m.get("rating"),
-        "plot":     m.get("plot"),
-        "poster":   m.get("poster"),
-        "genres":   m.get("genres", []),
-        "language": m.get("country", ""), # "language" in the frontend actually means country of origin
+        "id":          m.get("id"),
+        "title":       m.get("title"),
+        "year":        m.get("year"),
+        "rating":      m.get("rating"),
+        "plot":        m.get("plot"),
+        "poster":      m.get("poster"),
+        "genres":      m.get("genres", []),
+        "language":    m.get("country", ""),  # country of origin
+        "certificate": m.get("certificate", ""),
     }
 
 
@@ -107,13 +109,15 @@ def home():
 def get_movies():
     crawler = get_crawler()
 
-    search      = (request.args.get("search")      or "").strip().lower()
-    genre_filter= (request.args.get("genre")       or "").strip()
-    year_exact  = (request.args.get("year")        or "").strip()
-    year_from   = request.args.get("year_from",  type=int)
-    year_to     = request.args.get("year_to",    type=int)
-    min_rating  = request.args.get("min_rating", type=float)
-    sort_mode   = (request.args.get("sort")        or "").strip()   # "imdb_top10"
+    search       = (request.args.get("search")      or "").strip().lower()
+    genre_filter = (request.args.get("genre")       or "").strip()
+    year_exact   = (request.args.get("year")        or "").strip()
+    year_from    = request.args.get("year_from",  type=int)
+    year_to      = request.args.get("year_to",    type=int)
+    min_rating   = request.args.get("min_rating", type=float)
+    sort_mode    = (request.args.get("sort")        or "").strip()  # "imdb_top10"
+    # re: certificate filter — exact match against known rating labels
+    cert_filter  = (request.args.get("certificate") or "").strip()
 
     results = []
     for m in crawler.movies:
@@ -142,6 +146,12 @@ def get_movies():
         # rating filter
         if min_rating is not None and (m.get("rating") or 0) < min_rating:
             continue
+
+        # certificate filter — re: match exact label, case-insensitive
+        if cert_filter:
+            movie_cert = m.get("certificate") or ""
+            if not re.fullmatch(re.escape(cert_filter), movie_cert, re.IGNORECASE):
+                continue
 
         results.append(m)
 

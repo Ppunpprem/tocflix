@@ -20,7 +20,6 @@ const ALL_GENRES = [
   "Mystery",
   "Romance",
   "Sci-Fi",
-  "Sport",
   "Thriller",
   "War",
   "Western",
@@ -229,21 +228,24 @@ function useIsMobile() {
   return isMobile;
 }
 
+// Certificate ratings list
+const ALL_CERTIFICATES = ["G", "PG", "PG-13", "R", "NC-17", "NR"];
+
 //Filter Panel
 function FilterPanel({
   selectedGenres,
   toggleGenre,
   yearInput,
   setYearInput,
-  languageInput,
-  setLanguageInput,
+  selectedCert,
+  setSelectedCert,
   minRating,
   setMinRating,
   onApply,
   onClear,
 }) {
   const hasFilter =
-    selectedGenres.length > 0 || yearInput || languageInput || minRating;
+    selectedGenres.length > 0 || yearInput || selectedCert || minRating;
 
   return (
     <div>
@@ -344,8 +346,48 @@ function FilterPanel({
         }}
       />
 
-      {/* Language / Country */}
-      
+      {/* Certificate / Rating */}
+      <div>
+        <h3
+          style={{
+            fontSize: "13px",
+            fontWeight: 700,
+            color: "#fff",
+            marginBottom: "10px",
+            textTransform: "uppercase",
+            letterSpacing: "0.5px",
+          }}
+        >
+          Certificate
+        </h3>
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          {ALL_CERTIFICATES.map((c) => (
+            <label
+              key={c}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                cursor: "pointer",
+                fontSize: "13px",
+                color: selectedCert === c ? "#fff" : "#aaa",
+              }}
+            >
+              <input
+                type="radio"
+                name="certificate"
+                checked={selectedCert === c}
+                onChange={() =>
+                  setSelectedCert(selectedCert === c ? "" : c)
+                }
+                style={{ accentColor: "#e50914", cursor: "pointer" }}
+              />
+              {/* re: label maps directly to normalized_certificate values */}
+              {c}
+            </label>
+          ))}
+        </div>
+      </div>
 
       <hr
         style={{
@@ -447,7 +489,7 @@ export default function MoviesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedGenres, setSelectedGenres] = useState([]);
   const [yearInput, setYearInput] = useState("");
-  const [languageInput, setLanguageInput] = useState("");
+  const [selectedCert, setSelectedCert] = useState("");
   const [minRating, setMinRating] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const isMobile = useIsMobile();
@@ -491,7 +533,7 @@ export default function MoviesPage() {
   const handleClear = () => {
     setSelectedGenres([]);
     setYearInput("");
-    setLanguageInput("");
+    setSelectedCert("");
     setMinRating("");
     setSearchQuery("");
     setSearchParams({});
@@ -523,10 +565,10 @@ export default function MoviesPage() {
       // Year
       if (yearInput.trim() && String(m.year) !== yearInput.trim()) return false;
 
-      // Country / language
-      if (languageInput.trim()) {
-        const lang = (m.language || "").toLowerCase();
-        if (!lang.includes(languageInput.trim().toLowerCase())) return false;
+      // Certificate — re: case-insensitive exact match against normalized label
+      if (selectedCert) {
+        const certPattern = new RegExp(`^${selectedCert.replace("-", "\\-")}$`, "i");
+        if (!certPattern.test(m.certificate || "")) return false;
       }
 
       // Min rating
@@ -548,7 +590,7 @@ export default function MoviesPage() {
     searchQuery,
     selectedGenres,
     yearInput,
-    languageInput,
+    selectedCert,
     minRating,
     isTop10,
   ]);
@@ -556,7 +598,7 @@ export default function MoviesPage() {
   const activeFilterCount =
     selectedGenres.length +
     (yearInput ? 1 : 0) +
-    (languageInput ? 1 : 0) +
+    (selectedCert ? 1 : 0) +
     (minRating ? 1 : 0) +
     (searchQuery ? 1 : 0);
 
@@ -565,8 +607,8 @@ export default function MoviesPage() {
     toggleGenre,
     yearInput,
     setYearInput,
-    languageInput,
-    setLanguageInput,
+    selectedCert,
+    setSelectedCert,
     minRating,
     setMinRating,
     onClear: handleClear,
