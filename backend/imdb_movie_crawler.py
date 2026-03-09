@@ -200,20 +200,86 @@ class IMDbMovieCrawler:
         
         soup = BeautifulSoup(html, 'html.parser')
         
-        # Try JSON-LD extraction first coz to be faster
-        # Try JSON-LD extraction first coz to be faster
+        # 1. Try JSON-LD extraction first (Fastest)
         script_tags = soup.find_all('script', type='application/ld+json')
         for script in script_tags:
             try:
                 data = json.loads(script.string)
                 if isinstance(data, dict) and 'itemListElement' in data:
                     self._extract_from_json(data)
-                    # We don't return here anymore, but continue to HTML to supplement
                     break
             except Exception:
                 continue
+
+        # 2. Try NEXT_DATA extraction (Best for Credits/Directors in bulk)
+        next_data_script = soup.find('script', id='__NEXT_DATA__')
+        if next_data_script:
+            try:
+                next_data = json.loads(next_data_script.string)
+                # re: find edges in the deep nest
+                # Modern path: props -> pageProps -> pageData -> chartTitles -> edges
+                # or props -> pageProps -> mainColumnData -> ...
+                def find_edges(d):
+                    if not isinstance(d, dict): return None
+                    if 'edges' in d and isinstance(d['edges'], list): return d['edges']
+                    for k, v in d.items():
+                        res = find_edges(v)
+                        if res: return res
+                    return None
+                
+                edges = find_edges(next_data.get('props', {}))
+                if edges:
+                    print(f"Found {len(edges)} movies in NEXT_DATA. Extracting metadata...")
+                    for edge in edges:
+                        node = edge.get('node', {})
+                        mid = node.get('id')
+                        if mid and mid in self.movies_dict:
+                            movie = self.movies_dict[mid]
+                            
+                            # Extract Rating
+                            if not movie.get('rating'):
+                                rs = node.get('ratingsSummary', {})
+                                if rs.get('aggregateRating'):
+                                    movie['rating'] = float(rs['aggregateRating'])
+                            
+                            # Extract Plot
+                            if not movie.get('plot'):
+                                p = node.get('plot', {})
+                                if p.get('plotText', {}).get('plainText'):
+                                    movie['plot'] = p['plotText']['plainText']
+                            
+                            # Extract Runtime
+                            if not movie.get('runtime_minutes'):
+                                r = node.get('runtime', {})
+                                if r.get('seconds'):
+                                    movie['runtime_minutes'] = r['seconds'] // 60
+                                    movie['runtime'] = f"{movie['runtime_minutes'] // 60}h {movie['runtime_minutes'] % 60}m"
+                            
+                            # Extract Certificate
+                            if not movie.get('certificate'):
+                                c = node.get('certificate', {})
+                                if c.get('rating'):
+                                    movie['certificate'] = self.normalize_certificate(c['rating'])
+
+                            # Extract Directors and Stars (if present)
+                            credits = node.get('principalCreditsV2', []) or node.get('principalCredits', [])
+                            for group in credits:
+                                label = ""
+                                if isinstance(group, dict):
+                                    label = group.get('grouping', {}).get('text', '').lower() or \
+                                            group.get('category', {}).get('text', '').lower()
+                                    active_credits = group.get('credits', [])
+                                    names = [c.get('name', {}).get('nameText', {}).get('text') for c in active_credits]
+                                    names = [n for n in names if n]
+                                    
+                                    if 'director' in label:
+                                        movie['director'] = names
+                                    elif 'star' in label or 'actor' in label:
+                                        movie['cast'] = [{"name": n} for n in names]
+            except Exception as e:
+                print(f"Error parsing NEXT_DATA: {e}")
         
-        # Supplemental HTML parsing for Year, Runtime, Certificate from Chart rows
+        # 3. Supplemental HTML parsing for Year, Runtime, Certificate from Chart rows
         print("Running HTML extraction for supplementary data...")
         self._extract_from_html(soup)
         
@@ -396,193 +462,168 @@ class IMDbMovieCrawler:
     
     # this is fetch for detail page
     def fetch_movie_details(self, movie: dict) -> dict:
-        """Fetch detailed information for a specific movie"""
+        """Fetch detailed information for a specific movie using the /reference endpoint
+        which is typically not protected by AWS WAF challenges.
+        """
         if not movie.get('url') or movie.get('details_fetched'):
             return movie
 
-        html = self.fetch_page(movie['url'])
+        # Use the /reference URL for full data and WAF bypass
+        ref_url = movie['url'].rstrip('/') + '/reference'
+        html = self.fetch_page(ref_url)
         if not html:
-            print(f"FAILED to fetch: {movie['url']}")
+            print(f"FAILED to fetch: {ref_url}")
             return movie
 
         soup = BeautifulSoup(html, 'html.parser')
-        print(f"HTML Length: {len(html)}")
-        if "Request blocked" in html or "Cloudflare" in html:
-            print("❌ BLOCKED by Cloudflare/Anti-bot")
         
-        # Extract year
-        if not movie.get('year'):
-            year_elem = soup.select_one('[data-testid="hero-title-block__metadata"] li:first-child a')
-            if year_elem:
-                y = self.extract_year(year_elem.get_text())
-                if y:
-                    movie['year'] = y
-        
-        # Extract genres
-        genres_container = soup.select_one('[data-testid="genres"]')
-        if genres_container:
-            genres_list = []
-            for chip in genres_container.select('a'):
-                g = chip.get_text(strip=True)
-                if g:
-                    genres_list.append(g)
-            if genres_list:
-                movie['genres'] = genres_list
-        
-        # Extract country
-        country_elem = soup.select_one('[data-testid="title-details-origin"] a')
-        if country_elem:
-            movie['country'] = country_elem.get_text(strip=True)
-        
-        # Extract plot
-        plot_elem = soup.select_one('[data-testid="plot-xl"]') or soup.select_one('[data-testid="plot"]')
-        if plot_elem:
-            movie['plot'] = plot_elem.get_text(strip=True)
+        # Extract NEXT_DATA for robust structured data
+        next_data_script = soup.find('script', id='__NEXT_DATA__')
+        if next_data_script:
+            try:
+                data = json.loads(next_data_script.string)
                 
-            if not movie.get('language'):
-                detected = self.extract_language_from_text(movie['plot'])
-                if detected:
-                    movie['language'] = detected
-        # Extract director
-        directors = []
-        dir_section = soup.select_one('[data-testid="title-pc-principal-credit"]')
-        if dir_section:
-            # Modern IMDb often puts "Director" label followed by names
-            for a in dir_section.select('a[href*="/name/nm"]'):
-                name = a.get_text(strip=True)
-                if name:
-                    directors.append(name)
-        if directors:
-            movie['director'] = directors
-        
-        # Extract cast 
-        cast = []
-        for item in soup.select('[data-testid="title-cast-item"]')[:8]: # Increase to 8
-            name_elem = item.select_one('[data-testid="title-cast-item__actor"]')
-            if not name_elem:
-                continue
-            name = name_elem.get_text(strip=True)
+                # Helper to find keys in deep nest
+                def find_key(d, key):
+                    if not isinstance(d, dict): return None
+                    if key in d: return d[key]
+                    for v in d.values():
+                        res = find_key(v, key)
+                        if res: return res
+                    return None
+                
+                main_data = find_key(data, 'mainColumnData') or find_key(data, 'pageProps') or {}
+                # Sometimes it's nested elsewhere in /reference
+                if not main_data.get('productionBudget'):
+                    # Fallback to searching the whole JSON
+                    pass 
 
-            # Scrape actor photo
-            img_url = ""
-            img_elem = item.select_one('img')
-            if img_elem:
-                raw_src = img_elem.get('src') or img_elem.get('data-src') or ""
-                # Maintain the user's regex logic for resizing
-                if raw_src:
-                    clean_src = re.sub(
-                        r'_V1_.*?\.(jpg|jpeg|png|webp)',
-                        r'_V1_UX140_CR0,0,140,193_.\1',
-                        raw_src,
-                        flags=re.IGNORECASE
-                    )
-                    img_url = clean_src if clean_src else raw_src
+                # 1. Budget
+                pb = find_key(data, 'productionBudget')
+                if pb and pb.get('budget'):
+                    amt = pb['budget'].get('amount')
+                    curr = pb['budget'].get('currency', 'USD')
+                    movie['budget'] = f"${amt:,}" if curr == 'USD' else f"{curr} {amt:,}"
+                
+                # 2. Box Office
+                wg = find_key(data, 'worldwideGross')
+                if wg and wg.get('total'):
+                    amt = wg['total'].get('amount')
+                    movie['box_office'] = f"${amt:,}"
 
-            cast.append({"name": name, "img": img_url})
+                # 3. Awards
+                wins_data = find_key(data, 'wins')
+                noms_data = find_key(data, 'nominationsExcludeWins')
+                pres_data = find_key(data, 'prestigiousAwardSummary')
+                
+                award_parts = []
+                if pres_data and isinstance(pres_data, dict):
+                    award_name = pres_data.get('award', {}).get('text', 'Award')
+                    p_wins = pres_data.get('wins', 0)
+                    p_noms = pres_data.get('nominations', 0)
+                    if p_wins > 0:
+                        award_parts.append(f"Won {p_wins} {award_name}{'s' if p_wins > 1 else ''}")
+                    elif p_noms > 0:
+                        award_parts.append(f"Nominated for {p_noms} {award_name}{'s' if p_noms > 1 else ''}")
+                
+                counts = []
+                if wins_data and isinstance(wins_data, dict) and wins_data.get('total'): 
+                    counts.append(f"{wins_data['total']} wins")
+                if noms_data and isinstance(noms_data, dict) and noms_data.get('total'): 
+                    counts.append(f"{noms_data['total']} nominations")
+                
+                if counts:
+                    award_parts.append(" & ".join(counts) + " total")
+                
+                if award_parts:
+                    movie['awards'] = ". ".join(award_parts)
 
-        if cast:
-            movie['cast'] = cast
-        
-        # Extract runtime
-        runtime_elem = soup.select_one(
-            '[data-testid="title-techspec_runtime"] .ipc-metadata-list-item__list-content-item'
-        )
-        if runtime_elem:
-            raw_rt = runtime_elem.get_text(strip=True)
-            movie['runtime'] = raw_rt
-            mins = self.extract_runtime_minutes(raw_rt)
-            if mins:
-                movie['runtime_minutes'] = mins
-        
-        # Extract release date
-        rel_elem = soup.select_one(
-            '[data-testid="title-details-releasedate"] .ipc-metadata-list-item__list-content-item'
-        )
-        if rel_elem:
-            raw_date = rel_elem.get_text(strip=True)
-            movie['release_date'] = raw_date
-            date_m = re.search(
-                r'(\d{1,2}\s+\w+\s+\d{4}|\w+\s+\d{1,2},?\s+\d{4})',
-                raw_date
-            ) #re: extract clean date dd mm yy
-            if date_m:
-                movie['release_date_clean'] = date_m.group(1)
-            if not movie.get('year'):
-                y = self.extract_year(raw_date)
-                if y:
-                    movie['year'] = y
-        
-        # Extract budget
-        budget_elem = soup.select_one(
-            '[data-testid="title-boxoffice-budget"] .ipc-metadata-list-item__list-content-item'
-        )
-        if budget_elem:
-            raw_budget = budget_elem.get_text(strip=True)
-            movie['budget'] = raw_budget
-            amt = self.extract_money_usd(raw_budget)
-            if amt:
-                movie['budget_usd'] = amt
-        
-        # Extract worldwide box office
-        bo_elem = soup.select_one(
-            '[data-testid="title-boxoffice-cumulativeworldwidegross"] '
-            '.ipc-metadata-list-item__list-content-item'
-        )
-        if bo_elem:
-            raw_bo = bo_elem.get_text(strip=True)
-            movie['box_office'] = raw_bo
-            amt = self.extract_money_usd(raw_bo)
-            if amt:
-                movie['box_office_usd'] = amt
-        
-        # Extract rating certificate 
-        cert_elem = soup.select_one(
-            '[data-testid="title-details-certificate"] .ipc-metadata-list-item__list-content-item'
-        )
-        if cert_elem:
-            movie['certificate'] = self.normalize_certificate(cert_elem.get_text(strip=True))
-        
-        # Extract Metascore
-        meta_elem = soup.select_one('[data-testid="meta-score-box"]')
-        if meta_elem:
-            sm = re.search(r'(\d+)', meta_elem.get_text(strip=True)) #<-- here also regular lang
-            if sm:
-                movie['metascore'] = int(sm.group(1))
-        
-        # Extract awards
-        # Get the summary like "Won 3 Oscars"
-        awards_summary = soup.select_one('[data-testid="awards-link-category-with-total"]')
-        # Also try to get the detailed "31 wins & 31 nominations total"
-        awards_detail = soup.select_one('a[data-testid="award_information"] span.ipc-metadata-list-item__list-content-item') or \
-                        soup.select_one('.ipc-metadata-list-item--link .ipc-metadata-list-item__list-content span')
-        
-        awards_text = ""
-        if awards_summary:
-            awards_text = awards_summary.get_text(strip=True)
-        if awards_detail:
-            dt = awards_detail.get_text(strip=True)
-            if awards_text:
-                awards_text += " " + dt
-            else:
-                awards_text = dt
-        
-        if awards_text:
-            movie['awards'] = awards_text
-            movie['oscar_wins'] = self.extract_oscar_count(awards_text)
-            wins_m = re.search(r'(\d+)\s+win', awards_text, re.IGNORECASE) #re
-            noms_m = re.search(r'(\d+)\s+nomination', awards_text, re.IGNORECASE) #re
-            if wins_m:
-                movie['total_wins'] = int(wins_m.group(1))
-            if noms_m:
-                movie['total_nominations'] = int(noms_m.group(1))
+                # 4. Genres
+                gn_data = find_key(data, 'genres')
+                if gn_data:
+                    # Case 1: Dict with 'genres' key which is a list
+                    if isinstance(gn_data, dict) and isinstance(gn_data.get('genres'), list):
+                        movie['genres'] = [g.get('text') for g in gn_data['genres'] if isinstance(g, dict) and g.get('text')]
+                    # Case 2: Direct list of genre objects
+                    elif isinstance(gn_data, list):
+                        movie['genres'] = [g.get('genre', {}).get('text') or g.get('text') for g in gn_data if isinstance(g, dict)]
+                
+                # Fallback to titleGenres
+                if not movie.get('genres'):
+                    tg = find_key(data, 'titleGenres')
+                    if tg and isinstance(tg, list):
+                        movie['genres'] = [g.get('genre', {}).get('text') or g.get('text') for g in tg if isinstance(g, dict)]
+                
+                if movie.get('genres'):
+                    movie['genres'] = [g for g in movie['genres'] if g]
 
-        # Extract Backdrop (Hero Slate)
-        backdrop_elem = soup.select_one('[data-testid="hero-media__slate"] img')
-        if backdrop_elem:
-            movie['backdrop'] = backdrop_elem.get('src') or backdrop_elem.get('data-src')
+                # 4a. Release Date
+                rd = find_key(data, 'releaseDate')
+                if rd and isinstance(rd, dict):
+                    y, m, d = rd.get('year'), rd.get('month'), rd.get('day')
+                    if y and m and d:
+                        import datetime
+                        try:
+                            dt = datetime.date(y, m, d)
+                            movie['release_date'] = dt.strftime('%B %d, %Y')
+                        except:
+                            movie['release_date'] = f"{y}-{m:02d}-{d:02d}"
+
+                # 5. Backdrop (Main Image)
+                pi = find_key(data, 'primaryImage')
+                if pi and isinstance(pi, dict) and pi.get('url'):
+                    movie['backdrop'] = pi['url']
+                
+                # 6. Rating (if missing)
+                rs = find_key(data, 'ratingsSummary')
+                if rs and isinstance(rs, dict) and rs.get('aggregateRating'):
+                    movie['rating'] = float(rs['aggregateRating'])
+                
+                # 7. Cast & Director (Categories)
+                cats = find_key(data, 'categories')
+                if cats and isinstance(cats, list):
+                    for cat in cats:
+                        if not isinstance(cat, dict): continue
+                        cat_name = cat.get('name')
+                        items = cat.get('section', {}).get('items', [])
+                        
+                        if cat_name == "Director":
+                            directors = [item.get('rowTitle') for item in items if isinstance(item, dict) and item.get('rowTitle')]
+                            if directors: movie['director'] = directors
+                            
+                        elif cat_name in ["Cast", "Stars"]:
+                            cast = []
+                            for item in items[:8]:
+                                if not isinstance(item, dict): continue
+                                name = item.get('rowTitle')
+                                img = item.get('imageProps', {}).get('imageModel', {}).get('url')
+                                if name:
+                                    cast.append({"name": name, "img": img or ""})
+                            if cast: movie['cast'] = cast
+
+                # 8. Plot
+                p = find_key(data, 'plot')
+                if p and p.get('plotText', {}).get('plainText'):
+                    movie['plot'] = p['plotText']['plainText']
+
+                # 9. Runtime
+                rt = find_key(data, 'runtime')
+                if rt and rt.get('seconds'):
+                    s = rt['seconds']
+                    movie['runtime_minutes'] = s // 60
+                    movie['runtime'] = f"{s // 3600}h {(s % 3600) // 60}m"
+
+            except Exception as e:
+                print(f"Error parsing NEXT_DATA from reference page: {e}")
+
+        # Final backup to HTML if NEXT_DATA missed anything (re usage)
+        if not movie.get('plot'):
+            plot_elem = soup.select_one('[data-testid="plot-xl"]') or soup.select_one('.ipc-metadata-list-item__list-content-item')
+            if plot_elem:
+                movie['plot'] = plot_elem.get_text(strip=True)
 
         movie['details_fetched'] = True
-        time.sleep(0.3)   # <--delay
+        time.sleep(0.3)
         return movie
     
     def fetch_movies_details_parallel(self, movies: List[dict], max_workers: int = 10) -> None:
