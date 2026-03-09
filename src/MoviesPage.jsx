@@ -345,37 +345,7 @@ function FilterPanel({
       />
 
       {/* Language / Country */}
-      <div>
-        <h3
-          style={{
-            fontSize: "13px",
-            fontWeight: 700,
-            color: "#fff",
-            marginBottom: "10px",
-            textTransform: "uppercase",
-            letterSpacing: "0.5px",
-          }}
-        >
-          Country / Language
-        </h3>
-        <input
-          type="text"
-          placeholder="e.g. United States, Japan"
-          value={languageInput}
-          onChange={(e) => setLanguageInput(e.target.value)}
-          style={{
-            width: "100%",
-            background: "#2a2a2a",
-            border: "1px solid #3a3a3a",
-            borderRadius: "6px",
-            padding: "8px 10px",
-            color: "#fff",
-            fontSize: "13px",
-            outline: "none",
-            boxSizing: "border-box",
-          }}
-        />
-      </div>
+      
 
       <hr
         style={{
