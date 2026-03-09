@@ -9,7 +9,9 @@ from typing import List, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 CACHE_FILE = os.path.join(os.path.dirname(__file__), "movies_cache.json")
-CACHE_VERSION = "7"
+
+CACHE_VERSION = "4"
+OMDB_API_KEY = "4fc0a97f"
 
 class IMDbMovieCrawler:
     def __init__(self):
@@ -460,202 +462,124 @@ class IMDbMovieCrawler:
         self.movies_dict = {m['id']: m for m in self.movies if m.get('id')}
         print(f"Final dataset: {len(self.movies)} movies\n")
     
-    # this is fetch for detail page
+    # this is fetch for detail page  uses OMDb API instead of scraping IMDb HTML
     def fetch_movie_details(self, movie: dict) -> dict:
-        """Fetch detailed information for a specific movie using the /reference endpoint
-        which is typically not protected by AWS WAF challenges.
-        """
-        if not movie.get('url') or movie.get('details_fetched'):
+        """Fetch detailed information for a specific movie using OMDb API"""
+        if movie.get('details_fetched'):
             return movie
 
-        # Use the /reference URL for full data and WAF bypass
-        ref_url = movie['url'].rstrip('/') + '/reference'
-        html = self.fetch_page(ref_url)
-        if not html:
-            print(f"FAILED to fetch: {ref_url}")
+        movie_id = movie.get('id')
+        if not movie_id:
             return movie
 
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        # Extract NEXT_DATA for robust structured data
-        next_data_script = soup.find('script', id='__NEXT_DATA__')
-        if next_data_script:
-            try:
-                data = json.loads(next_data_script.string)
-                
-                # Helper to find keys in deep nest
-                def find_key(d, key):
-                    if not isinstance(d, dict): return None
-                    if key in d: return d[key]
-                    for v in d.values():
-                        res = find_key(v, key)
-                        if res: return res
-                    return None
-                
-                main_data = find_key(data, 'mainColumnData') or find_key(data, 'pageProps') or {}
-                # Sometimes it's nested elsewhere in /reference
-                if not main_data.get('productionBudget'):
-                    # Fallback to searching the whole JSON
-                    pass 
+        try:
+            # OMDb API  free
+            url = f"http://www.omdbapi.com/?i={movie_id}&apikey={OMDB_API_KEY}&plot=full"
+            response = requests.get(url, timeout=10)
+            data = response.json()
 
-                # 1. Budget
-                pb = find_key(data, 'productionBudget')
-                if pb and pb.get('budget'):
-                    amt = pb['budget'].get('amount')
-                    curr = pb['budget'].get('currency', 'USD')
-                    if amt is not None:
-                        movie['budget'] = f"${amt:,}" if curr == 'USD' else f"{curr} {amt:,}"
-                    elif pb['budget'].get('text'):
-                        # extract_money_usd fallback: parse text like "$1.2 million"
-                        parsed = self.extract_money_usd(pb['budget']['text'])
-                        if parsed is not None:
-                            movie['budget'] = f"${parsed:,}"
-                
-                # 2. Box Office
-                wg = find_key(data, 'worldwideGross')
-                if wg and wg.get('total'):
-                    amt = wg['total'].get('amount')
-                    if amt is not None:
-                        movie['box_office'] = f"${amt:,}"
-                    elif wg['total'].get('text'):
-                        # extract_money_usd fallback
-                        parsed = self.extract_money_usd(wg['total']['text'])
-                        if parsed is not None:
-                            movie['box_office'] = f"${parsed:,}"
+            if data.get('Response') == 'False':
+                print(f"OMDb: no data for {movie_id} — {data.get('Error')}")
+                movie['details_fetched'] = True
+                return movie
 
-                # 3. Awards
-                wins_data = find_key(data, 'wins')
-                noms_data = find_key(data, 'nominationsExcludeWins')
-                pres_data = find_key(data, 'prestigiousAwardSummary')
-                
-                award_parts = []
-                if pres_data and isinstance(pres_data, dict):
-                    award_name = pres_data.get('award', {}).get('text', 'Award')
-                    p_wins = pres_data.get('wins', 0)
-                    p_noms = pres_data.get('nominations', 0)
-                    if p_wins > 0:
-                        award_parts.append(f"Won {p_wins} {award_name}{'s' if p_wins > 1 else ''}")
-                    elif p_noms > 0:
-                        award_parts.append(f"Nominated for {p_noms} {award_name}{'s' if p_noms > 1 else ''}")
-                
-                counts = []
-                if wins_data and isinstance(wins_data, dict) and wins_data.get('total'): 
-                    counts.append(f"{wins_data['total']} wins")
-                if noms_data and isinstance(noms_data, dict) and noms_data.get('total'): 
-                    counts.append(f"{noms_data['total']} nominations")
-                
-                if counts:
-                    award_parts.append(" & ".join(counts) + " total")
-                
-                if award_parts:
-                    movie['awards'] = ". ".join(award_parts)
-                    # extract_oscar_count: parse Oscar wins from the composed string
-                    movie['oscar_wins'] = self.extract_oscar_count(movie['awards'])
+            # Year
+            raw_year = data.get('Year', '')
+            y = self.extract_year(raw_year) #<-- regular lang: extract 4-digit year
+            if y:
+                movie['year'] = y
 
-                # 4. Genres
-                gn_data = find_key(data, 'genres')
-                if gn_data:
-                    # Case 1: Dict with 'genres' key which is a list
-                    if isinstance(gn_data, dict) and isinstance(gn_data.get('genres'), list):
-                        movie['genres'] = [g.get('text') for g in gn_data['genres'] if isinstance(g, dict) and g.get('text')]
-                    # Case 2: Direct list of genre objects
-                    elif isinstance(gn_data, list):
-                        movie['genres'] = [g.get('genre', {}).get('text') or g.get('text') for g in gn_data if isinstance(g, dict)]
-                
-                # Fallback to titleGenres
-                if not movie.get('genres'):
-                    tg = find_key(data, 'titleGenres')
-                    if tg and isinstance(tg, list):
-                        movie['genres'] = [g.get('genre', {}).get('text') or g.get('text') for g in tg if isinstance(g, dict)]
-                
-                if movie.get('genres'):
-                    movie['genres'] = [g for g in movie['genres'] if g]
+            # Genres  split "Action, Drama, Thriller" into a list
+            raw_genres = data.get('Genre', '')
+            if raw_genres and raw_genres != 'N/A':
+                movie['genres'] = [g.strip() for g in raw_genres.split(',')]
 
-                # 4b. Country of Origin
-                if not movie.get('country'):
-                    coo = find_key(data, 'countriesOfOrigin')
-                    if coo and isinstance(coo, dict):
-                        countries = coo.get('countries', [])
-                        if countries and isinstance(countries, list):
-                            country_names = [c.get('text') for c in countries if isinstance(c, dict) and c.get('text')]
-                            if country_names:
-                                movie['country'] = ', '.join(country_names)
-                    elif coo and isinstance(coo, list):
-                        country_names = [c.get('text') for c in coo if isinstance(c, dict) and c.get('text')]
-                        if country_names:
-                            movie['country'] = ', '.join(country_names)
+            # Plot
+            plot = data.get('Plot', '')
+            if plot and plot != 'N/A':
+                movie['plot'] = plot
+                # detect language from plot text using regex
+                if not movie.get('language'):
+                    detected = self.extract_language_from_text(plot) #<-- regular lang
+                    if detected:
+                        movie['language'] = detected
 
-                rd = find_key(data, 'releaseDate')
-                if rd and isinstance(rd, dict):
-                    y, m, d = rd.get('year'), rd.get('month'), rd.get('day')
-                    if y and m and d:
-                        import datetime
-                        try:
-                            dt = datetime.date(y, m, d)
-                            movie['release_date'] = dt.strftime('%B %d, %Y')
-                        except:
-                            movie['release_date'] = f"{y}-{m:02d}-{d:02d}"
+            # Director
+            director = data.get('Director', '')
+            if director and director != 'N/A':
+                movie['director'] = [d.strip() for d in director.split(',')]
 
-                # 5. Backdrop (Main Image)
-                pi = find_key(data, 'primaryImage')
-                if pi and isinstance(pi, dict) and pi.get('url'):
-                    movie['backdrop'] = pi['url']
-                
-                # 6. Rating (if missing)
-                rs = find_key(data, 'ratingsSummary')
-                if rs and isinstance(rs, dict) and rs.get('aggregateRating'):
-                    movie['rating'] = float(rs['aggregateRating'])
-                
-                # 7. Cast & Director (Categories)
-                cats = find_key(data, 'categories')
-                if cats and isinstance(cats, list):
-                    for cat in cats:
-                        if not isinstance(cat, dict): continue
-                        cat_name = cat.get('name')
-                        items = cat.get('section', {}).get('items', [])
-                        
-                        if cat_name == "Director":
-                            directors = [item.get('rowTitle') for item in items if isinstance(item, dict) and item.get('rowTitle')]
-                            if directors: movie['director'] = directors
-                            
-                        elif cat_name in ["Cast", "Stars"]:
-                            cast = []
-                            for item in items[:8]:
-                                if not isinstance(item, dict): continue
-                                name = item.get('rowTitle')
-                                img = item.get('imageProps', {}).get('imageModel', {}).get('url')
-                                if name:
-                                    cast.append({"name": name, "img": img or ""})
-                            if cast: movie['cast'] = cast
+            # Cast 
+            actors = data.get('Actors', '')
+            if actors and actors != 'N/A':
+                cast = []
+                for name in actors.split(','):
+                    name = name.strip()
+                    if name:
+                        cast.append({
+                            "name": name,
+                            "img": (
+                                f"https://ui-avatars.com/api/"
+                                f"?name={name.replace(' ', '+')}&background=333&color=fff&size=150"
+                            )
+                        })
+                movie['cast'] = cast
 
-                # 8. Plot
-                p = find_key(data, 'plot')
-                if p and p.get('plotText', {}).get('plainText'):
-                    movie['plot'] = p['plotText']['plainText']
-                    # extract_language_from_text: detect spoken language from plot
-                    if not movie.get('language'):
-                        lang = self.extract_language_from_text(movie['plot'])
-                        if lang:
-                            movie['language'] = lang
+            # Runtime  use regex to parse "142 min" → int
+            raw_runtime = data.get('Runtime', '')
+            if raw_runtime and raw_runtime != 'N/A':
+                movie['runtime'] = raw_runtime
+                mins = self.extract_runtime_minutes(raw_runtime) #<-- regular lang
+                if mins:
+                    movie['runtime_minutes'] = mins
 
-                # 9. Runtime
-                rt = find_key(data, 'runtime')
-                if rt and rt.get('seconds'):
-                    s = rt['seconds']
-                    movie['runtime_minutes'] = s // 60
-                    movie['runtime'] = f"{s // 3600}h {(s % 3600) // 60}m"
+            # Country
+            country = data.get('Country', '')
+            if country and country != 'N/A':
+                movie['country'] = country.split(',')[0].strip()  # take first country only
 
-            except Exception as e:
-                print(f"Error parsing NEXT_DATA from reference page: {e}")
+            # Certificate (rated)
+            rated = data.get('Rated', '')
+            if rated and rated != 'N/A':
+                movie['certificate'] = self.normalize_certificate(rated) #<-- regular lang
 
-        # Final backup to HTML if NEXT_DATA missed anything (re usage)
-        if not movie.get('plot'):
-            plot_elem = soup.select_one('[data-testid="plot-xl"]') or soup.select_one('.ipc-metadata-list-item__list-content-item')
-            if plot_elem:
-                movie['plot'] = plot_elem.get_text(strip=True)
+            # Release date
+            released = data.get('Released', '')
+            if released and released != 'N/A':
+                movie['release_date'] = released
+
+            # Box office
+            box_office = data.get('BoxOffice', '')
+            if box_office and box_office != 'N/A':
+                movie['box_office'] = box_office
+                amt = self.extract_money_usd(box_office) #<-- regular lang
+                if amt:
+                    movie['box_office_usd'] = amt
+
+            # Metascore
+            metascore = data.get('Metascore', '')
+            if metascore and metascore != 'N/A':
+                m = re.search(r'(\d+)', metascore) #<-- regular lang
+                if m:
+                    movie['metascore'] = int(m.group(1))
+
+            # Awards
+            awards = data.get('Awards', '')
+            if awards and awards != 'N/A':
+                movie['awards'] = awards
+                movie['oscar_wins'] = self.extract_oscar_count(awards) #<-- regular lang
+                wins_m = re.search(r'(\d+)\s+win', awards, re.IGNORECASE) #<-- regular lang
+                noms_m = re.search(r'(\d+)\s+nomination', awards, re.IGNORECASE) #<-- regular lang
+                if wins_m:
+                    movie['total_wins'] = int(wins_m.group(1))
+                if noms_m:
+                    movie['total_nominations'] = int(noms_m.group(1))
+
+        except Exception as e:
+            print(f"OMDb fetch error for {movie_id}: {e}")
 
         movie['details_fetched'] = True
-        time.sleep(0.3)
+        time.sleep(0.1)  # small delay  OMDb is fine with fast requests
         return movie
     
     def fetch_movies_details_parallel(self, movies: List[dict], max_workers: int = 10) -> None:
