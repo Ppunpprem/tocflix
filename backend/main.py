@@ -1,3 +1,4 @@
+import re
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from imdb_movie_crawler import IMDbMovieCrawler
@@ -20,26 +21,31 @@ def get_crawler() -> IMDbMovieCrawler:
     global _crawler_cache
     with _cache_lock:
         if _crawler_cache is None:
-            print("Cold-start: fetching IMDb Top 150 …")
+            print("🚀 [Cloud Run Cold-start] Fetching IMDb Top 150 list...")
             c = IMDbMovieCrawler()
-            c.fetch_top_movies()                                   # list of 150
-            c.fetch_movies_details_parallel(c.movies, max_workers=20)# all details
+            success = c.fetch_top_movies() # list of 150
+            if not success:
+                print("❌ Failed to fetch movie list. Retrying or using partial data...")
+            
+            print(f"📊 Extracted {len(c.movies)} movies from list. Now fetching details in parallel...")
+            c.fetch_movies_details_parallel(c.movies, max_workers=20) # all details
             _crawler_cache = c
-            print(f"Cache ready — {len(c.movies)} movies loaded")
+            print(f"✅ Cache ready — {len(c.movies)} movies loaded with full details.")
         return _crawler_cache
 
 
 def format_movie_brief(m: dict) -> dict:
     """Return the fields needed for the movie-grid cards."""
     return {
-        "id":       m.get("id"),
-        "title":    m.get("title"),
-        "year":     m.get("year"),
-        "rating":   m.get("rating"),
-        "plot":     m.get("plot"),
-        "poster":   m.get("poster"),
-        "genres":   m.get("genres", []),
-        "language": m.get("country", ""), # "language" in the frontend actually means country of origin
+        "id":          m.get("id"),
+        "title":       m.get("title"),
+        "year":        m.get("year"),
+        "rating":      m.get("rating"),
+        "plot":        m.get("plot"),
+        "poster":      m.get("poster"),
+        "genres":      m.get("genres", []),
+        "language":    m.get("country", ""),  # country of origin
+        "certificate": m.get("certificate", ""),
     }
 
 
@@ -77,6 +83,7 @@ def format_movie_detail(movie: dict) -> dict:
         "runtime":     movie.get("runtime"),
         "rating":      movie.get("rating"),
         "country":     movie.get("country", ""),
+        "language":    movie.get("language", ""),
         "certificate": movie.get("certificate", "N/A"),
         "director":    directors_str,
         "genres":      movie.get("genres", []),
@@ -85,9 +92,10 @@ def format_movie_detail(movie: dict) -> dict:
         "releaseDate": movie.get("release_date"),
         "imdbScore":   f"{movie.get('rating', 'N/A')} / 10",
         "awardsInfo":  movie.get("awards"),
-        "backdrop":    movie.get("poster"),
+        "oscarWins":   movie.get("oscar_wins"),
+        "backdrop":    movie.get("backdrop") or movie.get("poster"),
         "plot":        movie.get("plot"),
-        "cast":       cast_list,
+        "cast":        cast_list,
     }
 
 
@@ -101,13 +109,15 @@ def home():
 def get_movies():
     crawler = get_crawler()
 
-    search      = (request.args.get("search")      or "").strip().lower()
-    genre_filter= (request.args.get("genre")       or "").strip()
-    year_exact  = (request.args.get("year")        or "").strip()
-    year_from   = request.args.get("year_from",  type=int)
-    year_to     = request.args.get("year_to",    type=int)
-    min_rating  = request.args.get("min_rating", type=float)
-    sort_mode   = (request.args.get("sort")        or "").strip()   # "imdb_top10"
+    search       = (request.args.get("search")      or "").strip().lower()
+    genre_filter = (request.args.get("genre")       or "").strip()
+    year_exact   = (request.args.get("year")        or "").strip()
+    year_from    = request.args.get("year_from",  type=int)
+    year_to      = request.args.get("year_to",    type=int)
+    min_rating   = request.args.get("min_rating", type=float)
+    sort_mode    = (request.args.get("sort")        or "").strip()  # "imdb_top10"
+    # re: certificate filter — exact match against known rating labels
+    cert_filter  = (request.args.get("certificate") or "").strip()
 
     results = []
     for m in crawler.movies:
@@ -137,6 +147,12 @@ def get_movies():
         if min_rating is not None and (m.get("rating") or 0) < min_rating:
             continue
 
+        # certificate filter — re: match exact label, case-insensitive
+        if cert_filter:
+            movie_cert = m.get("certificate") or ""
+            if not re.fullmatch(re.escape(cert_filter), movie_cert, re.IGNORECASE):
+                continue
+
         results.append(m)
 
     # Top-10 by rating mode (genre cards on home page)
@@ -162,6 +178,7 @@ def get_movie(movie_id):
 
     # details might not have been fetched for all movies during initial crawl to save time
     if not movie.get("details_fetched"):
+        print(f"🔍 On-demand fetching details for: {movie_id} ({movie.get('title')})")
         movie = crawler.fetch_movie_details(movie)
 
     return jsonify(format_movie_detail(movie))

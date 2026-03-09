@@ -45,7 +45,9 @@ function ErrorState({ onBack }) {
     <div className="w-full min-h-screen bg-[#0d0d0d] text-white flex flex-col items-center justify-center gap-6">
       <div className="text-6xl">🎬</div>
       <h2 className="text-2xl font-bold text-gray-200">Movie not found</h2>
-      <p className="text-gray-500 text-sm">Invalid ID or movie not in Top 250</p>
+      <p className="text-gray-500 text-sm">
+        Invalid ID or movie not in Top 250
+      </p>
       <button
         onClick={onBack}
         className="px-6 py-2.5 bg-red-600 hover:bg-red-500 rounded-lg font-semibold transition-colors text-sm"
@@ -60,19 +62,18 @@ function ErrorState({ onBack }) {
 //Detail Page
 export default function DetailPage() {
   const { id } = useParams();
-  const [movie,       setMovie]       = useState(null);
-  const [loading,     setLoading]     = useState(true);
-  const [error,       setError]       = useState(false);
+  const [movie, setMovie] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
   const [hoveredCast, setHoveredCast] = useState(null);
 
   useEffect(() => {
-
     fetch(`${API}/movies/${id}`)
-      .then(res => {
+      .then((res) => {
         if (!res.ok) throw new Error("Movie not found");
         return res.json();
       })
-      .then(data => {
+      .then((data) => {
         setMovie(data);
         setLoading(false);
       })
@@ -100,7 +101,9 @@ export default function DetailPage() {
           src={movie.backdrop}
           alt={movie.title}
           className="absolute inset-0 w-full h-full object-cover object-center"
-          onError={(e) => { e.target.style.display = 'none'; }}
+          onError={(e) => {
+            e.target.style.display = "none";
+          }}
         />
         <div className="absolute inset-0 bg-gradient-to-r from-[#000000] via-[#0d0d0d88] to-transparent" />
         <div className="absolute inset-0 bg-gradient-to-t from-[#0d0d0d] via-transparent to-transparent" />
@@ -126,17 +129,17 @@ export default function DetailPage() {
 
       {/* BODY*/}
       <div className="w-full px-6 md:px-12 py-10 grid grid-cols-1 md:grid-cols-2 gap-10 md:gap-16">
-
         {/* LEFT */}
         <div className="space-y-10">
-
           {/* Plot */}
           {movie.plot && (
             <section>
               <h2 className="text-base font-bold mb-3 tracking-widest uppercase text-gray-200 border-b border-gray-700 pb-2">
                 Plot Summary
               </h2>
-              <p className="text-gray-400 leading-relaxed text-sm">{movie.plot}</p>
+              <p className="text-gray-400 leading-relaxed text-sm">
+                {movie.plot}
+              </p>
             </section>
           )}
 
@@ -163,7 +166,10 @@ export default function DetailPage() {
                     >
                       {/* Use generated avatar IMDb doesn't expose cast photos via scraping */}
                       <img
-                        src={member.img || `https://ui-avatars.com/api/?name=${encodeURIComponent(member.name)}&background=333&color=fff&size=150`}
+                        src={
+                          member.img ||
+                          `https://ui-avatars.com/api/?name=${encodeURIComponent(member.name)}&background=333&color=fff&size=150`
+                        }
                         alt={member.name}
                         className="w-full h-full object-cover"
                         onError={(e) => {
@@ -187,7 +193,6 @@ export default function DetailPage() {
 
         {/* RIGHT */}
         <div className="space-y-10">
-
           {/* Movie Info */}
           <section>
             <h2 className="text-base font-bold mb-3 tracking-widest uppercase text-gray-200 border-b border-gray-700 pb-2">
@@ -196,7 +201,9 @@ export default function DetailPage() {
             <div className="space-y-2 text-sm">
               {movie.director && (
                 <p>
-                  <span className="text-gray-400 font-semibold">Director: </span>
+                  <span className="text-gray-400 font-semibold">
+                    Director:{" "}
+                  </span>
                   <span className="text-red-400">{movie.director}</span>
                 </p>
               )}
@@ -206,14 +213,18 @@ export default function DetailPage() {
                   {movie.genres.map((g, i, arr) => (
                     <span key={g}>
                       <span className="text-red-400">{g}</span>
-                      {i < arr.length - 1 && <span className="text-gray-600">, </span>}
+                      {i < arr.length - 1 && (
+                        <span className="text-gray-600">, </span>
+                      )}
                     </span>
                   ))}
                 </p>
               )}
               {movie.certificate && movie.certificate !== "N/A" && (
                 <p>
-                  <span className="text-gray-400 font-semibold">Certificate: </span>
+                  <span className="text-gray-400 font-semibold">
+                    Certificate:{" "}
+                  </span>
                   <span className="text-gray-200">{movie.certificate}</span>
                 </p>
               )}
@@ -227,16 +238,20 @@ export default function DetailPage() {
             </h2>
             <div className="space-y-2 text-sm">
               {[
-                { label: "Budget",               value: movie.budget      },
-                { label: "Worldwide Box Office",  value: movie.boxOffice   },
-                { label: "Runtime",               value: movie.runtime     },
-                { label: "Release Date",          value: movie.releaseDate },
-              ].filter(({ value }) => value).map(({ label, value }) => (
-                <p key={label}>
-                  <span className="text-gray-400 font-semibold">{label}: </span>
-                  <span className="text-gray-200">{value}</span>
-                </p>
-              ))}
+                { label: "Budget", value: movie.budget },
+                { label: "Worldwide Box Office", value: movie.boxOffice },
+                { label: "Runtime", value: movie.runtime },
+                { label: "Release Date", value: movie.releaseDate },
+              ]
+                .filter(({ value }) => value)
+                .map(({ label, value }) => (
+                  <p key={label}>
+                    <span className="text-gray-400 font-semibold">
+                      {label}:{" "}
+                    </span>
+                    <span className="text-gray-200">{value}</span>
+                  </p>
+                ))}
             </div>
           </section>
 
@@ -249,13 +264,17 @@ export default function DetailPage() {
               <div className="space-y-2 text-sm">
                 {movie.imdbScore && (
                   <p>
-                    <span className="text-gray-400 font-semibold">IMDb Score: </span>
+                    <span className="text-gray-400 font-semibold">
+                      IMDb Score:{" "}
+                    </span>
                     <span className="text-gray-200">{movie.imdbScore}</span>
                   </p>
                 )}
                 {movie.awardsInfo && (
                   <p>
-                    <span className="text-gray-400 font-semibold">Awards: </span>
+                    <span className="text-gray-400 font-semibold">
+                      Awards:{" "}
+                    </span>
                     <span className="text-gray-200">{movie.awardsInfo}</span>
                   </p>
                 )}

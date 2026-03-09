@@ -1,5 +1,6 @@
 import re
 import requests
+import cloudscraper
 from bs4 import BeautifulSoup
 import json
 import os
@@ -8,6 +9,7 @@ from typing import List, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 CACHE_FILE = os.path.join(os.path.dirname(__file__), "movies_cache.json")
+
 CACHE_VERSION = "4"
 OMDB_API_KEY = "4fc0a97f"
 
@@ -16,11 +18,22 @@ class IMDbMovieCrawler:
         self.url = "https://www.imdb.com/chart/top/"
         self.movies = []
         self.movies_dict = {}  # Store movies by ID for quick lookup
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        # Use cloudscraper to bypass IMDb Cloudflare protection (HTTP 202 errors)
+        self.scraper = cloudscraper.create_scraper(
+            browser={
+                'browser': 'chrome',
+                'platform': 'darwin',
+                'desktop': True
+            }
+        )
+        self.scraper.headers.update({
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
             'Accept-Language': 'en-US,en;q=0.9',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        }
+            'Cache-Control': 'max-age=0',
+            'DNT': '1',
+            'Upgrade-Insecure-Requests': '1',
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        })
     
     #I add to load and save the cache
     def load_cache(self) -> bool:
@@ -55,9 +68,9 @@ class IMDbMovieCrawler:
             print(f"Could not save cache: {e}")
     
     def fetch_page(self, url: str) -> Optional[str]:
-        """Fetch a web page with error handling"""
+        """Fetch a web page with error handling using Cloudscraper to bypass bot protection"""
         try:
-            response = requests.get(url, headers=self.headers, timeout=15)
+            response = self.scraper.get(url, timeout=15)
             response.raise_for_status()
             return response.text
         except requests.RequestException as e:
@@ -189,20 +202,97 @@ class IMDbMovieCrawler:
         
         soup = BeautifulSoup(html, 'html.parser')
         
-        # Try JSON-LD extraction first coz to be faster
+        # 1. Try JSON-LD extraction first (Fastest)
         script_tags = soup.find_all('script', type='application/ld+json')
         for script in script_tags:
             try:
                 data = json.loads(script.string)
                 if isinstance(data, dict) and 'itemListElement' in data:
                     self._extract_from_json(data)
-                    return True
+                    break
             except Exception:
                 continue
+
+        # 2. Try NEXT_DATA extraction (Best for Credits/Directors in bulk)
+        next_data_script = soup.find('script', id='__NEXT_DATA__')
+        if next_data_script:
+            try:
+                next_data = json.loads(next_data_script.string)
+                # re: find edges in the deep nest
+                # Modern path: props -> pageProps -> pageData -> chartTitles -> edges
+                # or props -> pageProps -> mainColumnData -> ...
+                def find_edges(d):
+                    if not isinstance(d, dict): return None
+                    if 'edges' in d and isinstance(d['edges'], list): return d['edges']
+                    for k, v in d.items():
+                        res = find_edges(v)
+                        if res: return res
+                    return None
+                
+                edges = find_edges(next_data.get('props', {}))
+                if edges:
+                    print(f"Found {len(edges)} movies in NEXT_DATA. Extracting metadata...")
+                    for edge in edges:
+                        node = edge.get('node', {})
+                        mid = node.get('id')
+                        if mid and mid in self.movies_dict:
+                            movie = self.movies_dict[mid]
+                            
+                            # Extract Rating
+                            if not movie.get('rating'):
+                                rs = node.get('ratingsSummary', {})
+                                if rs.get('aggregateRating'):
+                                    movie['rating'] = float(rs['aggregateRating'])
+                            
+                            # Extract Plot
+                            if not movie.get('plot'):
+                                p = node.get('plot', {})
+                                if p.get('plotText', {}).get('plainText'):
+                                    movie['plot'] = p['plotText']['plainText']
+                            
+                            # Extract Runtime
+                            if not movie.get('runtime_minutes'):
+                                r = node.get('runtime', {})
+                                if r.get('seconds'):
+                                    movie['runtime_minutes'] = r['seconds'] // 60
+                                    movie['runtime'] = f"{movie['runtime_minutes'] // 60}h {movie['runtime_minutes'] % 60}m"
+                            
+                            # Extract Certificate
+                            if not movie.get('certificate'):
+                                c = node.get('certificate', {})
+                                if c.get('rating'):
+                                    movie['certificate'] = self.normalize_certificate(c['rating'])
+
+                            # Extract Directors and Stars (if present)
+                            credits = node.get('principalCreditsV2', []) or node.get('principalCredits', [])
+                            for group in credits:
+                                label = ""
+                                if isinstance(group, dict):
+                                    label = group.get('grouping', {}).get('text', '').lower() or \
+                                            group.get('category', {}).get('text', '').lower()
+                                    active_credits = group.get('credits', [])
+                                    names = [c.get('name', {}).get('nameText', {}).get('text') for c in active_credits]
+                                    names = [n for n in names if n]
+                                    
+                                    if 'director' in label:
+                                        movie['director'] = names
+                                    elif 'star' in label or 'actor' in label:
+                                        movie['cast'] = [{"name": n} for n in names]
+            except Exception as e:
+                print(f"Error parsing NEXT_DATA: {e}")
         
-        # Fallback to HTML parsing
+        # 3. Supplemental HTML parsing for Year, Runtime, Certificate from Chart rows
+        print("Running HTML extraction for supplementary data...")
         self._extract_from_html(soup)
-        return len(self.movies) > 0
+        
+        if len(self.movies) > 0:
+            # Sort by rank and limit
+            self.movies.sort(key=lambda x: x.get('rank', 999))
+            self.movies = self.movies[:150]
+            self.save_cache()
+            return True
+            
+        return False
     
     def _extract_from_json(self, data: dict):
         """Extract movies from JSON-LD structured data"""
@@ -232,12 +322,45 @@ class IMDbMovieCrawler:
                 if rating_data.get('ratingValue'):
                     movie_data['rating'] = float(rating_data['ratingValue'])
 
-                desc = movie_item.get('description', '')
-                if desc:
-                    year = self.extract_year(desc)
-                    if year:
-                        movie_data['year'] = year
-                
+                # Enhanced extraction from JSON-LD
+                if movie_item.get('genre'):
+                    raw_genre = movie_item['genre']
+                    if isinstance(raw_genre, list):
+                        movie_data['genres'] = raw_genre
+                    else:
+                        # re: split by comma and clean
+                        movie_data['genres'] = [g.strip() for g in re.split(r',', str(raw_genre))]
+
+                if movie_item.get('description'):
+                    movie_data['plot'] = movie_item['description']
+                    # Try to get year from description if missing
+                    if not movie_data.get('year'):
+                        year = self.extract_year(movie_item['description'])
+                        if year:
+                            movie_data['year'] = year
+
+                if movie_item.get('contentRating'):
+                    movie_data['certificate'] = self.normalize_certificate(movie_item['contentRating'])
+
+                if movie_item.get('duration'):
+                    # ISO 8601 duration: PT2H22M
+                    dur = movie_item['duration']
+                    movie_data['runtime_iso'] = dur
+                    # re: extract hours and minutes
+                    hm = re.search(r'PT(?:(?P<h>\d+)H)?(?:(?P<m>\d+)M)?', dur)
+                    if hm:
+                        h = int(hm.group('h') or 0)
+                        m = int(hm.group('m') or 0)
+                        total_mins = h * 60 + m
+                        if total_mins > 0:
+                            movie_data['runtime_minutes'] = total_mins
+                            movie_data['runtime'] = f"{h}h {m}m" if h > 0 else f"{m}min"
+
+                # Mark as partially fetched so we don't ALWAYS need to visit detail page
+                # but we'll still call it a fetch if we have genres and plot
+                if movie_data.get('genres') and movie_data.get('plot'):
+                    movie_data['details_fetched'] = True
+
                 self.movies.append(movie_data)
                 if movie_data.get('id'):
                     self.movies_dict[movie_data['id']] = movie_data
@@ -251,51 +374,93 @@ class IMDbMovieCrawler:
         print(f"Extracted {len(self.movies)} movies\n")
     
     def _extract_from_html(self, soup: BeautifulSoup):
-        """Fallback HTML extraction method"""
-        movie_items = soup.find_all('li', class_=re.compile(r'ipc-metadata-list-summary-item'))
+        """Standard HTML scraping from the Top 250 chart page"""
+        # Select all movie rows
+        rows = soup.select('li.ipc-metadata-list-summary-item')
+        print(f"Found {len(rows)} movie rows. Extracting metadata...")
         
-        print(f"Found {len(movie_items)} movie items. Extracting...\n")
-        
-        for idx, item in enumerate(movie_items, 1):
+        for i, row in enumerate(rows):
             try:
-                movie_data = {'rank': idx}
-
-                title_elem = item.find('h3', class_=re.compile(r'ipc-title'))
-                if title_elem:
-                    movie_data['title'] = self.clean_title(title_elem.get_text(strip=True))
-
-                link = item.find('a', href=re.compile(r'/title/tt\d+/'))
-                if link and link.get('href'):
-                    movie_data['url'] = f"https://www.imdb.com{link['href']}"
-                    movie_data['id']  = self.extract_movie_id(movie_data['url'])
-
-                img = item.find('img', class_='ipc-image')
-                if img and img.get('src'):
-                    movie_data['poster'] = img['src']
-
-                for meta in item.find_all('span', class_=re.compile(r'cli-title-metadata-item')):
-                    text = meta.get_text(strip=True)
-                    if re.match(r'^\d{4}$', text):
-                        movie_data['year'] = int(text)
-
-                rating_elem = item.find('span', class_=re.compile(r'ipc-rating-star'))
-                if rating_elem:
-                    rm = re.search(r'(\d+\.?\d*)', rating_elem.get_text(strip=True)) #<-- here regular lang
-                    if rm:
-                        movie_data['rating'] = float(rm.group(1))
+                # Title and ID extraction
+                title_elem = row.select_one('h3.ipc-title__text')
+                url_elem = row.select_one('a.ipc-title-link-wrapper')
                 
-                if 'title' in movie_data:
-                    self.movies.append(movie_data)
-                    if movie_data.get('id'):
-                        self.movies_dict[movie_data['id']] = movie_data
+                if not title_elem or not url_elem:
+                    continue
                     
+                raw_title = title_elem.get_text(strip=True)
+                title = self.clean_title(raw_title)
+                movie_url = "https://www.imdb.com" + url_elem.get('href', '').split('?')[0]
+                movie_id = self.extract_movie_id(movie_url)
+                
+                if not movie_id:
+                    continue
+
+                # Use existing data from JSON-LD if available, otherwise create new
+                movie_data = self.movies_dict.get(movie_id)
+                if not movie_data:
+                    movie_data = {
+                        'id': movie_id,
+                        'title': title,
+                        'url': movie_url,
+                        'rank': i + 1
+                    }
+                    self.movies.append(movie_data)
+                    self.movies_dict[movie_id] = movie_data
+
+                # Metadata extraction (Year, Runtime, Certificate)
+                # re: find all cli-title-metadata-item spans
+                metadata_items = row.select('span.cli-title-metadata-item')
+                for item in metadata_items:
+                    text = item.get_text(strip=True)
+                    
+                    # 1. Year: exactly 4 digits
+                    if not movie_data.get('year'):
+                        y = self.extract_year(text)
+                        if y:
+                            movie_data['year'] = y
+                            continue
+                    
+                    # 2. Runtime: e.g., "2h 22m" or "121m"
+                    if 'h' in text.lower() or 'm' in text.lower():
+                        if not movie_data.get('runtime'):
+                            movie_data['runtime'] = text
+                            # re: parse runtime to minutes
+                            rm = re.search(r'(?:(?P<h>\d+)h)?\s*(?:(?P<m>\d+)m|min)?', text.lower())
+                            if rm:
+                                h = int(rm.group('h') or 0)
+                                m = int(rm.group('m') or 0)
+                                movie_data['runtime_minutes'] = h * 60 + m
+                            continue
+                    
+                    # 3. Certificate: typically remaining short item like "R", "PG-13"
+                    if len(text) < 10 and not movie_data.get('certificate'):
+                        # re: ensure it's not a year
+                        if not re.match(r'^\d{4}$', text) and 'h' not in text.lower():
+                            movie_data['certificate'] = self.normalize_certificate(text)
+
+                # Rating (fallback if JSON-LD missed it)
+                rating_elem = row.select_one('span.ipc-rating-star--rating')
+                if rating_elem and not movie_data.get('rating'):
+                    try:
+                        movie_data['rating'] = float(rating_elem.get_text(strip=True))
+                    except:
+                        pass
+                
+                # Check for poster if missing
+                if not movie_data.get('poster'):
+                    img_elem = row.select_one('img.ipc-image')
+                    if img_elem:
+                        movie_data['poster'] = img_elem.get('src') or img_elem.get('data-src')
+
             except Exception as e:
-                print(f"Error parsing movie {idx}: {e}")
+                print(f"Error parsing row {i}: {e}")
                 continue
         
+        # Ensure we keep the limit
         self.movies = self.movies[:150]
         self.movies_dict = {m['id']: m for m in self.movies if m.get('id')}
-        print(f"Extracted {len(self.movies)} movies\n")
+        print(f"Final dataset: {len(self.movies)} movies\n")
     
     # this is fetch for detail page  uses OMDb API instead of scraping IMDb HTML
     def fetch_movie_details(self, movie: dict) -> dict:
