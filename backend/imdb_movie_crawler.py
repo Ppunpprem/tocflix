@@ -8,7 +8,8 @@ from typing import List, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 CACHE_FILE = os.path.join(os.path.dirname(__file__), "movies_cache.json")
-CACHE_VERSION = "3"
+CACHE_VERSION = "4"
+OMDB_API_KEY = "4fc0a97f"
 
 class IMDbMovieCrawler:
     def __init__(self):
@@ -296,181 +297,124 @@ class IMDbMovieCrawler:
         self.movies_dict = {m['id']: m for m in self.movies if m.get('id')}
         print(f"Extracted {len(self.movies)} movies\n")
     
-    # this is fetch for detail page
+    # this is fetch for detail page  uses OMDb API instead of scraping IMDb HTML
     def fetch_movie_details(self, movie: dict) -> dict:
-        """Fetch detailed information for a specific movie"""
-        if not movie.get('url') or movie.get('details_fetched'):
+        """Fetch detailed information for a specific movie using OMDb API"""
+        if movie.get('details_fetched'):
             return movie
 
-        html = self.fetch_page(movie['url'])
-        if not html:
+        movie_id = movie.get('id')
+        if not movie_id:
             return movie
 
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        # Extract year
-        if not movie.get('year'):
-            year_elem = soup.select_one('[data-testid="hero-title-block__metadata"] a')
-            if year_elem:
-                y = self.extract_year(year_elem.get_text())
-                if y:
-                    movie['year'] = y
-        
-        # Extract genres
-        genres = []
-        for chip in soup.select('a.ipc-chip span.ipc-chip__text')[:10]:
-            g = chip.get_text(strip=True)
-            if g and len(g) < 20:
-                genres.append(g)
-        if genres:
-            movie['genres'] = genres
-        
-        # Extract country
-        country_elem = soup.select_one('[data-testid="title-details-origin"] a')
-        if country_elem:
-            movie['country'] = country_elem.get_text(strip=True)
-        
-        # Extract plot
-        plot_elem = (
-            soup.select_one('[data-testid="plot-xl"]') or
-            soup.select_one('[data-testid="plot-l"]') or
-            soup.select_one('[data-testid="plot-m"]') or
-            soup.select_one('[data-testid="plot-xs"]') or
-            soup.select_one('span[data-testid^="plot"]') or
-            soup.select_one('p[data-testid="plot"]') or
-            soup.select_one('.sc-e226b0e3-3') or
-            soup.select_one('[class*="GenresAndPlot"] span[role="presentation"]') or
-            soup.select_one('meta[name="description"]')
-        )
-        if plot_elem:
-            if plot_elem.name == 'meta':
-                movie['plot'] = plot_elem.get('content', '').strip()
-            else:
-                movie['plot'] = plot_elem.get_text(strip=True)
-                
-            if not movie.get('language'):
-                detected = self.extract_language_from_text(movie['plot'])
-                if detected:
-                    movie['language'] = detected
-        # Extract director
-        directors = []
-        dir_section = soup.select_one('[data-testid="title-pc-principal-credit"]')
-        if dir_section:
-            for a in dir_section.select('a.ipc-metadata-list-item__list-content-item'):
-                directors.append(a.get_text(strip=True))
-        if directors:
-            movie['director'] = directors
-        
-        # Extract cast 
-        cast = []
-        for item in soup.select('[data-testid="title-cast-item"]')[:5]:
-            name_elem = item.select_one('[data-testid="title-cast-item__actor"]')
-            if not name_elem:
-                continue
-            name = name_elem.get_text(strip=True)
+        try:
+            # OMDb API  free
+            url = f"http://www.omdbapi.com/?i={movie_id}&apikey={OMDB_API_KEY}&plot=full"
+            response = requests.get(url, timeout=10)
+            data = response.json()
 
-            # Scrape actor photo from the cast card <img>
-            img_url = ""
-            img_elem = item.select_one('img.ipc-image')
-            if img_elem:
-                raw_src = img_elem.get('src') or img_elem.get('data-src') or ""
-                # re: resize IMDb thumbnail to a usable portrait size
-                # IMDb image URLs contain a size token like _UX32_CR0,0,32,44_
-                # We replace it with UX140 to get a proper headshot
-                clean_src = re.sub(
-                    r'_V1_.*?\.(jpg|jpeg|png|webp)',
-                    r'_V1_UX140_CR0,0,140,193_.\1',
-                    raw_src,
-                    flags=re.IGNORECASE
-                )   # here also regular lang
-                img_url = clean_src if clean_src else raw_src
+            if data.get('Response') == 'False':
+                print(f"OMDb: no data for {movie_id} — {data.get('Error')}")
+                movie['details_fetched'] = True
+                return movie
 
-            cast.append({"name": name, "img": img_url})
+            # Year
+            raw_year = data.get('Year', '')
+            y = self.extract_year(raw_year) #<-- regular lang: extract 4-digit year
+            if y:
+                movie['year'] = y
 
-        if cast:
-            movie['cast'] = cast
-        
-        # Extract runtime
-        runtime_elem = soup.select_one(
-            '[data-testid="title-techspec_runtime"] .ipc-metadata-list-item__list-content-item'
-        )
-        if runtime_elem:
-            raw_rt = runtime_elem.get_text(strip=True)
-            movie['runtime'] = raw_rt
-            mins = self.extract_runtime_minutes(raw_rt)
-            if mins:
-                movie['runtime_minutes'] = mins
-        
-        # Extract release date
-        rel_elem = soup.select_one(
-            '[data-testid="title-details-releasedate"] .ipc-metadata-list-item__list-content-item'
-        )
-        if rel_elem:
-            raw_date = rel_elem.get_text(strip=True)
-            movie['release_date'] = raw_date
-            date_m = re.search(
-                r'(\d{1,2}\s+\w+\s+\d{4}|\w+\s+\d{1,2},?\s+\d{4})',
-                raw_date
-            ) #re: extract clean date dd mm yy
-            if date_m:
-                movie['release_date_clean'] = date_m.group(1)
-            if not movie.get('year'):
-                y = self.extract_year(raw_date)
-                if y:
-                    movie['year'] = y
-        
-        # Extract budget
-        budget_elem = soup.select_one(
-            '[data-testid="title-boxoffice-budget"] .ipc-metadata-list-item__list-content-item'
-        )
-        if budget_elem:
-            raw_budget = budget_elem.get_text(strip=True)
-            movie['budget'] = raw_budget
-            amt = self.extract_money_usd(raw_budget)
-            if amt:
-                movie['budget_usd'] = amt
-        
-        # Extract worldwide box office
-        bo_elem = soup.select_one(
-            '[data-testid="title-boxoffice-cumulativeworldwidegross"] '
-            '.ipc-metadata-list-item__list-content-item'
-        )
-        if bo_elem:
-            raw_bo = bo_elem.get_text(strip=True)
-            movie['box_office'] = raw_bo
-            amt = self.extract_money_usd(raw_bo)
-            if amt:
-                movie['box_office_usd'] = amt
-        
-        # Extract rating certificate 
-        cert_elem = soup.select_one(
-            '[data-testid="title-details-certificate"] .ipc-metadata-list-item__list-content-item'
-        )
-        if cert_elem:
-            movie['certificate'] = self.normalize_certificate(cert_elem.get_text(strip=True))
-        
-        # Extract Metascore
-        meta_elem = soup.select_one('[data-testid="meta-score-box"]')
-        if meta_elem:
-            sm = re.search(r'(\d+)', meta_elem.get_text(strip=True)) #<-- here also regular lang
-            if sm:
-                movie['metascore'] = int(sm.group(1))
-        
-        # Extract awards
-        awards_elem = soup.select_one('[data-testid="award_information"]')
-        if awards_elem:
-            awards_text = awards_elem.get_text(strip=True)
-            movie['awards'] = awards_text
-            movie['oscar_wins'] = self.extract_oscar_count(awards_text)
-            wins_m = re.search(r'(\d+)\s+win', awards_text, re.IGNORECASE) #<-- regular lang
-            noms_m = re.search(r'(\d+)\s+nomination', awards_text, re.IGNORECASE) #<-- regular lang
-            if wins_m:
-                movie['total_wins'] = int(wins_m.group(1))
-            if noms_m:
-                movie['total_nominations'] = int(noms_m.group(1))
+            # Genres  split "Action, Drama, Thriller" into a list
+            raw_genres = data.get('Genre', '')
+            if raw_genres and raw_genres != 'N/A':
+                movie['genres'] = [g.strip() for g in raw_genres.split(',')]
+
+            # Plot
+            plot = data.get('Plot', '')
+            if plot and plot != 'N/A':
+                movie['plot'] = plot
+                # detect language from plot text using regex
+                if not movie.get('language'):
+                    detected = self.extract_language_from_text(plot) #<-- regular lang
+                    if detected:
+                        movie['language'] = detected
+
+            # Director
+            director = data.get('Director', '')
+            if director and director != 'N/A':
+                movie['director'] = [d.strip() for d in director.split(',')]
+
+            # Cast 
+            actors = data.get('Actors', '')
+            if actors and actors != 'N/A':
+                cast = []
+                for name in actors.split(','):
+                    name = name.strip()
+                    if name:
+                        cast.append({
+                            "name": name,
+                            "img": (
+                                f"https://ui-avatars.com/api/"
+                                f"?name={name.replace(' ', '+')}&background=333&color=fff&size=150"
+                            )
+                        })
+                movie['cast'] = cast
+
+            # Runtime  use regex to parse "142 min" → int
+            raw_runtime = data.get('Runtime', '')
+            if raw_runtime and raw_runtime != 'N/A':
+                movie['runtime'] = raw_runtime
+                mins = self.extract_runtime_minutes(raw_runtime) #<-- regular lang
+                if mins:
+                    movie['runtime_minutes'] = mins
+
+            # Country
+            country = data.get('Country', '')
+            if country and country != 'N/A':
+                movie['country'] = country.split(',')[0].strip()  # take first country only
+
+            # Certificate (rated)
+            rated = data.get('Rated', '')
+            if rated and rated != 'N/A':
+                movie['certificate'] = self.normalize_certificate(rated) #<-- regular lang
+
+            # Release date
+            released = data.get('Released', '')
+            if released and released != 'N/A':
+                movie['release_date'] = released
+
+            # Box office
+            box_office = data.get('BoxOffice', '')
+            if box_office and box_office != 'N/A':
+                movie['box_office'] = box_office
+                amt = self.extract_money_usd(box_office) #<-- regular lang
+                if amt:
+                    movie['box_office_usd'] = amt
+
+            # Metascore
+            metascore = data.get('Metascore', '')
+            if metascore and metascore != 'N/A':
+                m = re.search(r'(\d+)', metascore) #<-- regular lang
+                if m:
+                    movie['metascore'] = int(m.group(1))
+
+            # Awards
+            awards = data.get('Awards', '')
+            if awards and awards != 'N/A':
+                movie['awards'] = awards
+                movie['oscar_wins'] = self.extract_oscar_count(awards) #<-- regular lang
+                wins_m = re.search(r'(\d+)\s+win', awards, re.IGNORECASE) #<-- regular lang
+                noms_m = re.search(r'(\d+)\s+nomination', awards, re.IGNORECASE) #<-- regular lang
+                if wins_m:
+                    movie['total_wins'] = int(wins_m.group(1))
+                if noms_m:
+                    movie['total_nominations'] = int(noms_m.group(1))
+
+        except Exception as e:
+            print(f"OMDb fetch error for {movie_id}: {e}")
 
         movie['details_fetched'] = True
-        time.sleep(0.3)   # <--delay
+        time.sleep(0.1)  # small delay  OMDb is fine with fast requests
         return movie
     
     def fetch_movies_details_parallel(self, movies: List[dict], max_workers: int = 10) -> None:
