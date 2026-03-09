@@ -81,6 +81,7 @@ def format_movie_detail(movie: dict) -> dict:
         "runtime":     movie.get("runtime"),
         "rating":      movie.get("rating"),
         "country":     movie.get("country", ""),
+        "language":    movie.get("language", ""),
         "certificate": movie.get("certificate", "N/A"),
         "director":    directors_str,
         "genres":      movie.get("genres", []),
@@ -89,9 +90,10 @@ def format_movie_detail(movie: dict) -> dict:
         "releaseDate": movie.get("release_date"),
         "imdbScore":   f"{movie.get('rating', 'N/A')} / 10",
         "awardsInfo":  movie.get("awards"),
+        "oscarWins":   movie.get("oscar_wins"),
         "backdrop":    movie.get("backdrop") or movie.get("poster"),
         "plot":        movie.get("plot"),
-        "cast":       cast_list,
+        "cast":        cast_list,
     }
 
 

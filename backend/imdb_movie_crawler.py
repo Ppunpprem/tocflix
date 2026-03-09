@@ -9,7 +9,7 @@ from typing import List, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 CACHE_FILE = os.path.join(os.path.dirname(__file__), "movies_cache.json")
-CACHE_VERSION = "6"
+CACHE_VERSION = "7"
 
 class IMDbMovieCrawler:
     def __init__(self):
@@ -503,13 +503,25 @@ class IMDbMovieCrawler:
                 if pb and pb.get('budget'):
                     amt = pb['budget'].get('amount')
                     curr = pb['budget'].get('currency', 'USD')
-                    movie['budget'] = f"${amt:,}" if curr == 'USD' else f"{curr} {amt:,}"
+                    if amt is not None:
+                        movie['budget'] = f"${amt:,}" if curr == 'USD' else f"{curr} {amt:,}"
+                    elif pb['budget'].get('text'):
+                        # extract_money_usd fallback: parse text like "$1.2 million"
+                        parsed = self.extract_money_usd(pb['budget']['text'])
+                        if parsed is not None:
+                            movie['budget'] = f"${parsed:,}"
                 
                 # 2. Box Office
                 wg = find_key(data, 'worldwideGross')
                 if wg and wg.get('total'):
                     amt = wg['total'].get('amount')
-                    movie['box_office'] = f"${amt:,}"
+                    if amt is not None:
+                        movie['box_office'] = f"${amt:,}"
+                    elif wg['total'].get('text'):
+                        # extract_money_usd fallback
+                        parsed = self.extract_money_usd(wg['total']['text'])
+                        if parsed is not None:
+                            movie['box_office'] = f"${parsed:,}"
 
                 # 3. Awards
                 wins_data = find_key(data, 'wins')
@@ -537,6 +549,8 @@ class IMDbMovieCrawler:
                 
                 if award_parts:
                     movie['awards'] = ". ".join(award_parts)
+                    # extract_oscar_count: parse Oscar wins from the composed string
+                    movie['oscar_wins'] = self.extract_oscar_count(movie['awards'])
 
                 # 4. Genres
                 gn_data = find_key(data, 'genres')
@@ -557,7 +571,20 @@ class IMDbMovieCrawler:
                 if movie.get('genres'):
                     movie['genres'] = [g for g in movie['genres'] if g]
 
-                # 4a. Release Date
+                # 4b. Country of Origin
+                if not movie.get('country'):
+                    coo = find_key(data, 'countriesOfOrigin')
+                    if coo and isinstance(coo, dict):
+                        countries = coo.get('countries', [])
+                        if countries and isinstance(countries, list):
+                            country_names = [c.get('text') for c in countries if isinstance(c, dict) and c.get('text')]
+                            if country_names:
+                                movie['country'] = ', '.join(country_names)
+                    elif coo and isinstance(coo, list):
+                        country_names = [c.get('text') for c in coo if isinstance(c, dict) and c.get('text')]
+                        if country_names:
+                            movie['country'] = ', '.join(country_names)
+
                 rd = find_key(data, 'releaseDate')
                 if rd and isinstance(rd, dict):
                     y, m, d = rd.get('year'), rd.get('month'), rd.get('day')
@@ -605,6 +632,11 @@ class IMDbMovieCrawler:
                 p = find_key(data, 'plot')
                 if p and p.get('plotText', {}).get('plainText'):
                     movie['plot'] = p['plotText']['plainText']
+                    # extract_language_from_text: detect spoken language from plot
+                    if not movie.get('language'):
+                        lang = self.extract_language_from_text(movie['plot'])
+                        if lang:
+                            movie['language'] = lang
 
                 # 9. Runtime
                 rt = find_key(data, 'runtime')
